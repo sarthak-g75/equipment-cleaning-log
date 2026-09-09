@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "sourceMap": false
+  },
+  // The runtime image ships application code and the seed script only — tests
+  // and their helpers have no business in a production bundle.
+  "include": ["src/**/*.ts", "prisma/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests", "src/**/*.test.ts"]
+}
