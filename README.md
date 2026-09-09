@@ -7,7 +7,9 @@ cleaning records logged against it, and a field-level audit trail over every cha
 - **Web** — React 19, TypeScript, Vite 8, Tailwind 4, TanStack Query, React Hook Form + Zod
 - **Tests** — Vitest, supertest (API), Testing Library + MSW (web)
 
-See [NOTES.md](./NOTES.md) for the design decisions, trade-offs, and what was left out.
+See [NOTES.md](./NOTES.md) for the design decisions, trade-offs, and what was left out, and
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the layering, dependency inversion and
+where each SOLID principle actually shows up.
 
 ---
 
@@ -26,7 +28,8 @@ That brings up Postgres, applies migrations, seeds demo data, and serves both ap
 |---|---|
 | Web | <http://localhost:5173> |
 | API | <http://localhost:4000/api/v1> |
-| Health check | <http://localhost:4000/health> |
+| Liveness probe | <http://localhost:4000/health/live> |
+| Readiness probe | <http://localhost:4000/health/ready> |
 
 Sign in with one of the seeded users (password `password123` for all three):
 
@@ -84,7 +87,7 @@ npm run dev                      # http://localhost:5173
 ## Tests
 
 ```bash
-cd api && npm test               # 63 tests: unit + integration + e2e
+cd api && npm test               # 77 tests: unit + integration + e2e
 cd web && npm test               # 31 tests: components with a mocked network
 ```
 
@@ -98,6 +101,7 @@ What the tests are actually for:
 | Suite | Proves |
 |---|---|
 | `api/src/lib/audit/diff.test.ts` | Field-level diffing: date-identity, omitted vs. explicitly-null vs. unchanged, whitelist enforcement |
+| `api/src/modules/**/*.service.test.ts` | Every business rule, against in-memory fakes — no database, milliseconds |
 | `api/src/lib/pagination.test.ts` | Cursor round-trip, tamper rejection, `hasMore` probe logic |
 | `api/tests/integration/pagination.test.ts` | Paging yields every row exactly once — including rows sharing a `cleanedAt` — and is unaffected by concurrent inserts |
 | `api/tests/integration/audit.test.ts` | Audit writes are correct, and a failed audit write rolls the record update back |
@@ -180,12 +184,16 @@ api/
   src/
     config/          Zod-validated env, parsed once, fails fast at startup
     database/        the Prisma singleton
+    shared/ports.ts  the interfaces the services depend on (no Prisma here)
+    container.ts     composition root: wires ports to Prisma adapters
+    database/        the Prisma singleton + the only Prisma-aware repositories
     lib/
-      audit/         diff.ts, serialize.ts, audit.repository.ts  ← the audit core
+      audit/         diff.ts, serialize.ts  ← the audit core
       pagination.ts  cursor encode/decode + the keyset predicate
+      logger.ts      structured JSON logging with redaction
       errors.ts      AppError hierarchy
-    middleware/      auth, validate, error-handler
-    modules/         auth · equipment · cleaning-records · audit
+    middleware/      auth, validate, rate-limit, request-logger, error-handler
+    modules/         auth · users · equipment · cleaning-records · audit · health
     app.ts           the app, without listen(), so supertest can mount it
   tests/             integration + e2e, helpers, global setup
 

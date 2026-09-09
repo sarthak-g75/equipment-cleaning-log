@@ -216,6 +216,61 @@ the database.
 
 ---
 
+## Production readiness
+
+A working take-home and a production service are different bars, and the gap was real.
+What was added, and the failure each one prevents:
+
+- **Structured logging with request correlation.** `console.log` is not queryable by a
+  log aggregator. Every response now carries an `x-request-id` (propagated if the caller
+  supplied one), and it appears on every log line for that request — which is what turns
+  "it broke around 3pm" into a specific request. Sensitive fields are redacted in the
+  logger config, globally, rather than trusting every future call site to remember.
+- **Rate limiting on `/auth/login`.** bcrypt slows a single guess, not a million of them
+  across a botnet. Successful logins do not consume the budget, so a legitimate user
+  cannot lock themselves out.
+- **Split liveness and readiness probes.** These are deliberately different:
+  `/health/live` never touches the database, because a liveness probe that fails during a
+  database outage makes the orchestrator kill and restart every replica — turning a
+  recoverable dependency failure into a self-inflicted outage. `/health/ready` does check
+  it, so an instance that cannot serve is pulled from the load balancer instead of
+  returning 500s.
+- **The container no longer runs as root**, ships `dumb-init` so SIGTERM actually reaches
+  Node and the graceful-shutdown path runs, and declares a `HEALTHCHECK`.
+- **`unhandledRejection` and `uncaughtException` are handled.** A programming error
+  leaves the process in an unknown state; logging and exiting for a clean restart is
+  safer than serving requests from possibly-corrupted state.
+- **Shutdown closes idle keep-alive sockets.** `server.close()` alone can stall until a
+  client happens to disconnect.
+
+The one that was an actual bug, not a hardening gap: **the compose config re-ran the seed
+on every API start, and the seed truncates.** Restarting the API silently destroyed
+everything entered since the container came up. The seed now skips a non-empty database
+unless explicitly forced, and there is a manual test in the commit history proving data
+survives a restart.
+
+Still not addressed, and honestly so: rate limiting is per-process memory and needs Redis
+behind more than one instance; there is no metrics endpoint or tracing; and there is no
+caching layer.
+
+## SOLID, and where I stopped
+
+`docs/ARCHITECTURE.md` maps each principle to the specific place it shows up. The short
+version: services depend on interfaces in `src/shared/ports.ts`, the Prisma adapter is the
+only file that knows the ORM exists, and `src/container.ts` is the one place that wires
+them together.
+
+The payoff is not theoretical — **38 of the 77 API tests now run with no database**,
+because the services can be driven by in-memory fakes. That let the integration suite
+narrow to what genuinely needs Postgres: the keyset query, the row lock, and
+transactional rollback.
+
+What I deliberately did **not** do, because the brief asks for code that avoids
+over-engineering: no DI container, no abstract factories, no interface-per-class. An
+abstraction with one implementation and no second caller is indirection, not design. The
+line I drew: invert a dependency when it removes real coupling or unlocks a real test;
+otherwise leave the concrete call in place.
+
 ## Stack notes
 
 **Prisma over raw SQL.** Migrations, generated types and `$transaction` out of the box, and
@@ -257,6 +312,16 @@ able to explain every line.
 The picker filters client-side over an already-fetched list, and `GET /users` caps at 50.
 For a directory larger than that, the filter should move to a debounced server-side query —
 the endpoint already accepts `?q=`, so it is a hook change rather than a redesign.
+
+**Front-end performance.** The bundle was a single 448 kB chunk, so a visitor hitting the
+login page downloaded the entire application. Routes behind the auth gate are now
+`React.lazy`-split and dependencies are chunked separately from application code, which
+takes the initial payload to ~318 kB (~104 kB gzipped) and means shipping a fix no longer
+invalidates the framework bundle in every user's cache. Table rows are memoised on stable
+callbacks, so expanding one row's audit trail no longer re-renders all of them — each row
+owns a query hook, so that waste scales with page size.
+
+Not done: virtualization (ten rows at a time does not need it) and prefetch-on-hover.
 
 **No global store.** Server state is TanStack Query; the status filter is URL state so a
 filtered view is shareable and survives a refresh; everything else is local. Reaching for
