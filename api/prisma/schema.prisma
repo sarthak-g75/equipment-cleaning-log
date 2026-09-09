@@ -1,0 +1,111 @@
+// Equipment Cleaning Log — schema.
+//
+// Design notes that are not obvious from the field list:
+//
+//  * IDs are UUIDs stored as native `uuid`. They give the keyset cursor a total,
+//    stable tie-break order under the same B-tree as the sort column, they let
+//    path params be validated with z.uuid() for free, and they make the
+//    `SELECT ... FOR UPDATE` row lock's ::uuid cast work.
+//
+//  * `AuditEntry` is one row per *changed field*, not one row per change event.
+//    `changeSetId` groups the rows written by a single transaction back into one
+//    event for display. See NOTES.md for why this beats a JSONB diff blob.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  operator
+  qa
+}
+
+enum EquipmentStatus {
+  active
+  retired
+}
+
+enum RecordStatus {
+  pending
+  verified
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+}
+
+enum AuditEntity {
+  CleaningRecord
+  Equipment
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  role         Role     @default(operator)
+  passwordHash String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  auditEntries AuditEntry[]
+}
+
+model Equipment {
+  id        String          @id @default(uuid()) @db.Uuid
+  name      String
+  code      String          @unique
+  status    EquipmentStatus @default(active)
+  createdAt DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime        @updatedAt @db.Timestamptz(3)
+
+  cleaningRecords CleaningRecord[]
+}
+
+model CleaningRecord {
+  id          String       @id @default(uuid()) @db.Uuid
+  equipmentId String       @db.Uuid
+  // The operator who physically performed the cleaning. Deliberately a plain
+  // string and NOT a User FK: the person cleaning a vessel on the shop floor
+  // often has no login. The audit "who" is a separate, authenticated actor.
+  cleanedBy   String
+  cleanedAt   DateTime     @db.Timestamptz(3)
+  method      String
+  notes       String?
+  status      RecordStatus @default(pending)
+  createdAt   DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
+
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+
+  // Two indexes, not one. Postgres can only use a leading prefix of a composite
+  // index, so [equipmentId, status, ...] cannot serve the unfiltered list query.
+  @@index([equipmentId, cleanedAt(sort: Desc), id(sort: Desc)])
+  @@index([equipmentId, status, cleanedAt(sort: Desc), id(sort: Desc)])
+}
+
+model AuditEntry {
+  id          String      @id @default(uuid()) @db.Uuid
+  changeSetId String      @db.Uuid
+  entityType  AuditEntity
+  entityId    String      @db.Uuid
+  action      AuditAction
+  field       String
+  oldValue    String?     @db.Text
+  newValue    String?     @db.Text
+  actorId     String      @db.Uuid
+  // Snapshotted, not joined. If a user is later renamed, history must still show
+  // the name as it stood when the change was made.
+  actorName   String
+  changedAt   DateTime    @db.Timestamptz(3)
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([entityType, entityId, changedAt(sort: Desc), id(sort: Desc)])
+  @@index([entityType, entityId, field, changedAt(sort: Desc)])
+}
