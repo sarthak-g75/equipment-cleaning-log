@@ -2,11 +2,11 @@ import type { Request, Response } from 'express';
 import { validated } from '../../middleware/validate';
 import { currentUser } from '../../middleware/auth';
 import type { LoginInput } from './auth.validation';
-import * as authService from './auth.service';
+import { services } from '../../container';
 
 export async function loginHandler(_req: Request, res: Response): Promise<void> {
   const { body } = validated<unknown, unknown, LoginInput>(res);
-  const result = await authService.login(body);
+  const result = await services.auth.login(body);
 
   res.status(200).json({ data: result });
 }

@@ -29,6 +29,18 @@ const EQUIPMENT = [
 const METHODS = ['CIP - caustic', 'CIP - acid rinse', 'Manual wipe (IPA 70%)', 'SIP', 'COP soak'];
 
 async function main(): Promise<void> {
+  // The container runs this on every start, and this seed TRUNCATES. Without
+  // the guard, restarting the API would silently destroy whatever had been
+  // entered since — a genuinely dangerous default. `npm run db:seed` still
+  // forces a full refresh, which is what a developer wants locally.
+  if (process.env.SEED_MODE === 'if-empty') {
+    const existing = await prisma.user.count();
+    if (existing > 0) {
+      console.log(`Database already has ${existing} users; skipping seed.`);
+      return;
+    }
+  }
+
   // Idempotent: a re-run should refresh the dataset, not append a second copy.
   await prisma.auditEntry.deleteMany();
   await prisma.cleaningRecord.deleteMany();

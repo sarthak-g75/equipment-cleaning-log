@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import type { CleaningRecord, Equipment, Role, User } from '@prisma/client';
 import { prisma } from '../../src/database/prisma';
 import { signAccessToken } from '../../src/middleware/auth';
-import type { Actor } from '../../src/lib/audit';
+import type { Actor } from '../../src/shared/ports';
 
 let counter = 0;
 const next = () => (counter += 1);

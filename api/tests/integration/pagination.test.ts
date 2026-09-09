@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Equipment, User } from '@prisma/client';
 import { prisma } from '../../src/database/prisma';
-import { listRecords } from '../../src/modules/cleaning-records/cleaning-record.service';
+import { services } from '../../src/container';
+
+const listRecords = services.cleaningRecords.list;
 import { hasDatabase, useCleanDatabase } from '../helpers/db';
 import { makeEquipment, makeRecords, makeUser } from '../helpers/factories';
 

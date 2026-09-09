@@ -13,6 +13,12 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   JWT_EXPIRES_IN: z.string().default('15m'),
   CORS_ORIGIN: z.string().default('http://localhost:5173'),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  /** Hops to trust for X-Forwarded-For. 0 = direct exposure, 1 = one proxy. */
+  TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
+  /** Requests per window per IP against the auth endpoints. */
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(10),
+  AUTH_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(15 * 60 * 1000),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -37,6 +43,12 @@ export const config = Object.freeze({
     expiresIn: env.JWT_EXPIRES_IN,
   }),
   corsOrigin: env.CORS_ORIGIN,
+  logLevel: env.LOG_LEVEL,
+  trustProxy: env.TRUST_PROXY,
+  rateLimit: Object.freeze({
+    authMax: env.AUTH_RATE_LIMIT_MAX,
+    authWindowMs: env.AUTH_RATE_LIMIT_WINDOW_MS,
+  }),
   /**
    * bcrypt cost. 12 is the production floor; 4 in tests because otherwise every
    * login in the suite spends ~250ms hashing and the suite runtime is dominated

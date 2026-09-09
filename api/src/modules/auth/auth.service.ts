@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
-import { prisma } from '../../database/prisma';
 import { UnauthorizedError } from '../../lib/errors';
 import { signAccessToken, type AuthenticatedUser } from '../../middleware/auth';
+import type { UnitOfWork } from '../../shared/ports';
 import type { LoginInput } from './auth.validation';
 
 export interface LoginResult {
@@ -9,25 +9,38 @@ export interface LoginResult {
   readonly user: AuthenticatedUser;
 }
 
-export async function login(input: LoginInput): Promise<LoginResult> {
-  const user = await prisma.user.findUnique({ where: { email: input.email } });
+export interface AuthService {
+  login(input: LoginInput): Promise<LoginResult>;
+}
 
-  // One generic message and one comparison path for both "no such user" and
-  // "wrong password". Returning different errors — or returning early without
-  // hashing — turns this endpoint into a user-enumeration oracle.
-  const passwordHash = user?.passwordHash ?? '$2b$04$invalidinvalidinvalidinvalidinvalidinvalidinvalidinva';
-  const isValid = await bcrypt.compare(input.password, passwordHash);
+/**
+ * A bcrypt hash of a value nobody knows, used so an unknown email still costs a
+ * full comparison. Returning early would make response time a reliable oracle
+ * for "does this account exist?".
+ */
+const DUMMY_HASH = '$2b$12$C6UzMDM.H6dfI/f/IKcEeO3s5oJ5CkxvVvJp1qO2PMoAqZ0oBBcTS';
 
-  if (!user || !isValid) {
-    throw new UnauthorizedError('Incorrect email or password.');
-  }
+export function createAuthService(uow: UnitOfWork): AuthService {
+  return {
+    async login(input) {
+      const user = await uow.repos.users.findByEmail(input.email);
 
-  const authenticated: AuthenticatedUser = {
-    id: user.id,
-    email: user.email,
-    name: user.name,
-    role: user.role,
+      const isValid = await bcrypt.compare(input.password, user?.passwordHash ?? DUMMY_HASH);
+
+      // One message for both "no such user" and "wrong password", so the
+      // endpoint cannot be used to enumerate accounts.
+      if (!user || !isValid) {
+        throw new UnauthorizedError('Incorrect email or password.');
+      }
+
+      const authenticated: AuthenticatedUser = {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+      };
+
+      return { token: signAccessToken(authenticated), user: authenticated };
+    },
   };
-
-  return { token: signAccessToken(authenticated), user: authenticated };
 }

@@ -2,12 +2,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { CleaningRecord, Equipment, User } from '@prisma/client';
 import { prisma } from '../../src/database/prisma';
-import {
-  createRecord,
-  updateRecord,
-  verifyRecord,
-} from '../../src/modules/cleaning-records/cleaning-record.service';
-import { getRecordHistory } from '../../src/modules/audit/audit.service';
+import { services } from '../../src/container';
+
+const { create: createRecord, update: updateRecord, verify: verifyRecord } = services.cleaningRecords;
+const { getRecordHistory } = services.audit;
 import { hasDatabase, useCleanDatabase } from '../helpers/db';
 import { actorFor, makeEquipment, makeUser } from '../helpers/factories';
 

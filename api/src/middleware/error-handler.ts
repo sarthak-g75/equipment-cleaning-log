@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import { AppError, ConflictError, NotFoundError } from '../lib/errors';
-import { config } from '../config';
+import { logger } from '../lib/logger';
 
 interface ErrorBody {
   error: {
@@ -43,7 +43,7 @@ function translatePrismaError(error: unknown): AppError | null {
  */
 export function errorHandler(
   error: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
@@ -66,10 +66,9 @@ export function errorHandler(
     return;
   }
 
-  // Programming error: log everything we have, tell the client nothing.
-  if (!config.isTest) {
-    console.error('[unhandled]', error);
-  }
+  // Programming error: log everything we have, tell the client nothing. The
+  // request id ties this line to the response the user saw.
+  logger.error({ err: error, reqId: req.id }, 'unhandled error');
 
   res.status(500).json({
     error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' },

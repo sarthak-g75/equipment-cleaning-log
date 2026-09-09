@@ -1,6 +1,7 @@
 services:
   db:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-cleaning}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cleaning}
@@ -21,6 +22,7 @@ services:
   api:
     build:
       context: ./api
+    restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: 4000
@@ -28,23 +30,30 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       CORS_ORIGIN: http://localhost:${WEB_PORT:-5173}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Seed only an empty database. Without this, every restart would truncate
+      # and reseed, destroying anything entered since the container came up.
+      SEED_MODE: if-empty
     ports:
       - '${API_PORT:-4000}:4000'
     depends_on:
       db:
         condition: service_healthy
     # Migrate and seed on start so `docker compose up` is genuinely one command.
-    command: sh -c "npx prisma migrate deploy && node dist/prisma/seed.js && node dist/src/server.js"
+    command: >-
+      sh -c "npx prisma migrate deploy && node dist/prisma/seed.js && node dist/src/server.js"
 
   web:
     build:
       context: ./web
       args:
         VITE_API_URL: http://localhost:${API_PORT:-4000}/api/v1
+    restart: unless-stopped
     ports:
       - '${WEB_PORT:-5173}:80'
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   db-data:

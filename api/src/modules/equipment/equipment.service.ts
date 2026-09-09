@@ -1,95 +1,92 @@
 import type { Equipment } from '@prisma/client';
-import { prisma } from '../../database/prisma';
 import { ConflictError, NotFoundError } from '../../lib/errors';
-import { diffFields, recordChanges, type Actor } from '../../lib/audit';
+import { diffFields } from '../../lib/audit/diff';
 import type {
-  CreateEquipmentInput,
-  ListEquipmentQuery,
-  UpdateEquipmentInput,
-} from './equipment.validation';
+  Actor,
+  CreateEquipmentData,
+  UnitOfWork,
+  UpdateEquipmentData,
+} from '../../shared/ports';
+import type { ListEquipmentQuery } from './equipment.validation';
 
-/**
- * Compile-time checked against the Prisma model: renaming a column breaks the
- * build instead of silently dropping a field out of the audit trail.
- */
 export const EQUIPMENT_TRACKED_FIELDS = [
   'name',
   'code',
   'status',
 ] as const satisfies readonly (keyof Equipment)[];
 
-export function listEquipment(query: ListEquipmentQuery): Promise<Equipment[]> {
-  // Equipment is a small, bounded reference list (tens of rows, not millions),
-  // so it is returned whole. The interesting pagination is on cleaning records.
-  return prisma.equipment.findMany({
-    where: query.status ? { status: query.status } : {},
-    orderBy: [{ status: 'asc' }, { code: 'asc' }],
-  });
+export interface EquipmentService {
+  list(query: ListEquipmentQuery): Promise<Equipment[]>;
+  get(id: string): Promise<Equipment>;
+  create(input: CreateEquipmentData, actor: Actor): Promise<Equipment>;
+  update(id: string, patch: UpdateEquipmentData, actor: Actor): Promise<Equipment>;
+  remove(id: string): Promise<void>;
 }
 
-export async function getEquipment(id: string): Promise<Equipment> {
-  const equipment = await prisma.equipment.findUnique({ where: { id } });
-  if (!equipment) throw new NotFoundError('Equipment', id);
-  return equipment;
-}
+export function createEquipmentService(uow: UnitOfWork): EquipmentService {
+  return {
+    // Equipment is a small, bounded reference list (tens of rows, not millions),
+    // so it is returned whole. The interesting pagination is on cleaning records.
+    list: (query) => uow.repos.equipment.list(query.status),
 
-export function createEquipment(input: CreateEquipmentInput, actor: Actor): Promise<Equipment> {
-  return prisma.$transaction(async (tx) => {
-    const created = await tx.equipment.create({ data: input });
+    async get(id) {
+      const equipment = await uow.repos.equipment.findById(id);
+      if (!equipment) throw new NotFoundError('Equipment', id);
+      return equipment;
+    },
 
-    // Creation and update share one diff implementation: `before = null` emits
-    // every field as null -> value, so the trail can reconstruct the row's
-    // entire history without a special case for "created".
-    await recordChanges(tx, {
-      entityType: 'Equipment',
-      entityId: created.id,
-      action: 'CREATE',
-      actor,
-      changes: diffFields(null, created, EQUIPMENT_TRACKED_FIELDS),
-    });
+    create(input, actor) {
+      return uow.transaction(async (repos) => {
+        const created = await repos.equipment.create(input);
 
-    return created;
-  });
-}
+        await repos.audit.record({
+          entityType: 'Equipment',
+          entityId: created.id,
+          action: 'CREATE',
+          actor,
+          changes: diffFields(null, created, EQUIPMENT_TRACKED_FIELDS),
+        });
 
-export function updateEquipment(
-  id: string,
-  patch: UpdateEquipmentInput,
-  actor: Actor,
-): Promise<Equipment> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "Equipment" WHERE id = ${id}::uuid FOR UPDATE`;
+        return created;
+      });
+    },
 
-    const before = await tx.equipment.findUnique({ where: { id } });
-    if (!before) throw new NotFoundError('Equipment', id);
+    update(id, patch, actor) {
+      return uow.transaction(async (repos) => {
+        await repos.equipment.lockForUpdate(id);
 
-    const after = await tx.equipment.update({ where: { id }, data: patch });
+        const before = await repos.equipment.findById(id);
+        if (!before) throw new NotFoundError('Equipment', id);
 
-    await recordChanges(tx, {
-      entityType: 'Equipment',
-      entityId: id,
-      action: 'UPDATE',
-      actor,
-      changes: diffFields(before, after, EQUIPMENT_TRACKED_FIELDS),
-    });
+        const after = await repos.equipment.update(id, patch);
 
-    return after;
-  });
-}
+        await repos.audit.record({
+          entityType: 'Equipment',
+          entityId: id,
+          action: 'UPDATE',
+          actor,
+          changes: diffFields(before, after, EQUIPMENT_TRACKED_FIELDS),
+        });
 
-export async function deleteEquipment(id: string): Promise<void> {
-  const recordCount = await prisma.cleaningRecord.count({ where: { equipmentId: id } });
+        return after;
+      });
+    },
 
-  // Deleting equipment that has cleaning records would orphan an audit trail,
-  // which is the one thing this system exists to prevent. Retirement is the
-  // correct operation for equipment that has been used.
-  if (recordCount > 0) {
-    throw new ConflictError(
-      'EQUIPMENT_IN_USE',
-      `This equipment has ${recordCount} cleaning record(s) and cannot be deleted. Set its status to 'retired' instead.`,
-    );
-  }
+    async remove(id) {
+      const recordCount = await uow.repos.cleaningRecords.countByEquipment(id);
 
-  const deleted = await prisma.equipment.deleteMany({ where: { id } });
-  if (deleted.count === 0) throw new NotFoundError('Equipment', id);
+      // Deleting equipment that has cleaning records would orphan an audit
+      // trail, which is the one thing this system exists to prevent. Retirement
+      // is the correct operation for equipment that has been used.
+      if (recordCount > 0) {
+        throw new ConflictError(
+          'EQUIPMENT_IN_USE',
+          `This equipment has ${recordCount} cleaning record(s) and cannot be deleted. Set its status to 'retired' instead.`,
+        );
+      }
+
+      const deleted = await uow.repos.equipment.deleteById(id);
+      if (deleted === 0) throw new NotFoundError('Equipment', id);
+    },
+  };
 }
