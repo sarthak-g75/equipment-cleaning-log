@@ -1,0 +1,18 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-brand-50: #eef4ff;
+  --color-brand-100: #dce6ff;
+  --color-brand-600: #3552cc;
+  --color-brand-700: #2a41a3;
+}
+
+/* Only suppress motion, never suppress the state change it communicates. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
