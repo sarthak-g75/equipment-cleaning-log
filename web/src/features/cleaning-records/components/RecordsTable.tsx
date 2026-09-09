@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import type { CleaningRecord } from '../../../types/api';
 import { Badge } from '../../../components/Badge';
 import { Button } from '../../../components/Button';
@@ -23,6 +23,13 @@ export function RecordsTable({
 }: RecordsTableProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Stable references, so the memoised rows below are not invalidated on every
+  // parent render — an inline arrow here would defeat the memo entirely.
+  const handleToggleAudit = useCallback(
+    (id: string) => setExpandedId((current) => (current === id ? null : id)),
+    [],
+  );
+
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[46rem] border-collapse text-left text-sm">
@@ -38,21 +45,18 @@ export function RecordsTable({
           </tr>
         </thead>
         <tbody>
-          {records.map((record) => {
-            const isExpanded = expandedId === record.id;
-            return (
-              <RecordRow
-                key={record.id}
-                record={record}
-                isExpanded={isExpanded}
-                canVerify={canVerify}
-                isVerifying={verifyingId === record.id}
-                onToggleAudit={() => setExpandedId(isExpanded ? null : record.id)}
-                onEdit={() => onEdit(record)}
-                onVerify={() => onVerify(record.id)}
-              />
-            );
-          })}
+          {records.map((record) => (
+            <RecordRow
+              key={record.id}
+              record={record}
+              isExpanded={expandedId === record.id}
+              canVerify={canVerify}
+              isVerifying={verifyingId === record.id}
+              onToggleAudit={handleToggleAudit}
+              onEdit={onEdit}
+              onVerify={onVerify}
+            />
+          ))}
         </tbody>
       </table>
     </div>
@@ -64,12 +68,18 @@ interface RecordRowProps {
   isExpanded: boolean;
   canVerify: boolean;
   isVerifying: boolean;
-  onToggleAudit: () => void;
-  onEdit: () => void;
-  onVerify: () => void;
+  /** Take the record/id rather than closing over it, so the reference is stable. */
+  onToggleAudit: (id: string) => void;
+  onEdit: (record: CleaningRecord) => void;
+  onVerify: (id: string) => void;
 }
 
-function RecordRow({
+/**
+ * Memoised because expanding one row, or a verify mutation settling, otherwise
+ * re-renders every row in the table. Each row owns a query hook, so the waste
+ * grows with the page size rather than staying constant.
+ */
+const RecordRow = memo(function RecordRow({
   record,
   isExpanded,
   canVerify,
@@ -105,7 +115,7 @@ function RecordRow({
             <Button
               variant="ghost"
               size="sm"
-              onClick={onToggleAudit}
+              onClick={() => onToggleAudit(record.id)}
               aria-expanded={isExpanded}
               aria-controls={`audit-${record.id}`}
             >
@@ -114,12 +124,12 @@ function RecordRow({
             {/* A verified record is a signed-off document: the API rejects edits
                 to it, so the UI must not offer one. */}
             {!isVerified && (
-              <Button variant="secondary" size="sm" onClick={onEdit}>
+              <Button variant="secondary" size="sm" onClick={() => onEdit(record)}>
                 Edit
               </Button>
             )}
             {!isVerified && canVerify && (
-              <Button size="sm" onClick={onVerify} disabled={isVerifying}>
+              <Button size="sm" onClick={() => onVerify(record.id)} disabled={isVerifying}>
                 {isVerifying ? 'Verifying…' : 'Verify'}
               </Button>
             )}
@@ -140,4 +150,4 @@ function RecordRow({
       )}
     </>
   );
-}
+});

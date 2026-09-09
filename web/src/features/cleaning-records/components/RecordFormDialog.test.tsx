@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../../tests/renderWithProviders';
 import { ApiError } from '../../../services/apiClient';
@@ -83,6 +83,12 @@ describe('RecordFormDialog', () => {
     await user.type(screen.getByLabelText('Method'), 'Rinse with tap water');
     await user.click(screen.getByRole('button', { name: 'Log cleaning' }));
 
+    // Waited in two stages rather than one: the submit has to round-trip
+    // through the resolver and the rejected mutation before the error can
+    // render, and collapsing both into a single findBy makes the assertion
+    // race the whole chain under parallel load.
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+
     // The message lands next to the field, not in a generic banner, and the
     // dialog stays open with the user's input intact.
     expect(
@@ -100,6 +106,7 @@ describe('RecordFormDialog', () => {
     open({ onSubmit, record: makeRecord() });
 
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'A verified record cannot be edited.',

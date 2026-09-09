@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { CleaningRecord, RecordStatus } from '../types/api';
 import { Badge } from '../components/Badge';
@@ -51,10 +51,13 @@ export function EquipmentDetailPage() {
     setIsFormOpen(true);
   };
 
-  const openEdit = (record: CleaningRecord) => {
+  // Stable, because RecordsTable memoises its rows on these references.
+  const openEdit = useCallback((record: CleaningRecord) => {
     setEditing(record);
     setIsFormOpen(true);
-  };
+  }, []);
+
+  const handleVerify = useCallback((id: string) => verifyRecord.mutate(id), [verifyRecord]);
 
   const rows = records.data?.pages.flatMap((page) => page.data) ?? [];
   const isRetired = equipment.data?.status === 'retired';
@@ -142,7 +145,7 @@ export function EquipmentDetailPage() {
               records={rows}
               canVerify={user?.role === 'qa'}
               onEdit={openEdit}
-              onVerify={(id) => verifyRecord.mutate(id)}
+              onVerify={handleVerify}
               verifyingId={verifyRecord.isPending ? verifyRecord.variables : null}
             />
             <div className="flex items-center justify-between border-t border-slate-200 px-3 py-2.5">
