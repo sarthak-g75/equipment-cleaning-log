@@ -18,6 +18,12 @@ interface ComboboxProps {
   emptyMessage?: string;
   'aria-invalid'?: boolean;
   'aria-describedby'?: string | undefined;
+  /**
+   * Provide this to filter on the server. When present the options are taken as
+   * already-filtered for the current query and no client-side filtering is
+   * applied — which is what lets the picker reach past the endpoint's page cap.
+   */
+  onSearchChange?: ((query: string) => void) | undefined;
 }
 
 /**
@@ -37,9 +43,10 @@ interface ComboboxProps {
  *   - Blurring without committing reverts the query, so the visible text can
  *     never disagree with the value actually held.
  *
- * Filtering is client-side over an already-fetched page. The list is capped
- * server-side, so a directory larger than that page should switch to a
- * debounced server-side query — noted in NOTES.md.
+ * Filtering happens wherever the caller asks. With `onSearchChange` the query
+ * is handed upward and the options arrive already filtered by the server, which
+ * is how the people picker reaches past the directory endpoint's page cap.
+ * Without it, filtering is client-side over whatever options were passed in.
  */
 export function Combobox({
   id,
@@ -52,6 +59,7 @@ export function Combobox({
   emptyMessage = 'No matches',
   'aria-invalid': ariaInvalid,
   'aria-describedby': ariaDescribedBy,
+  onSearchChange,
 }: ComboboxProps) {
   const listboxId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -70,6 +78,10 @@ export function Combobox({
   const displayValue = isOpen ? query : (selected?.label ?? '');
 
   const filtered = useMemo(() => {
+    // Already filtered upstream; filtering again would hide results the server
+    // matched on a field this component cannot see.
+    if (onSearchChange) return options;
+
     const needle = query.trim().toLowerCase();
     if (!needle) return options;
     return options.filter(
@@ -77,7 +89,7 @@ export function Combobox({
         option.label.toLowerCase().includes(needle) ||
         option.hint?.toLowerCase().includes(needle),
     );
-  }, [options, query]);
+  }, [options, query, onSearchChange]);
 
   // Filtering can shrink the list below the stored index. Clamping during render
   // rather than resyncing in an effect means the value can never be momentarily
@@ -97,13 +109,18 @@ export function Combobox({
   const open = () => {
     if (disabled) return;
     setQuery('');
-    setActiveIndex(Math.max(0, filtered.findIndex((o) => o.value === value)));
+    onSearchChange?.('');
+    // Anchored against `options`, not `filtered`: the query is being cleared in
+    // this same call, so `filtered` still reflects the *previous* query and
+    // would put the highlight on the wrong row.
+    setActiveIndex(Math.max(0, options.findIndex((o) => o.value === value)));
     setIsOpen(true);
   };
 
   const close = () => {
     setIsOpen(false);
     setQuery('');
+    onSearchChange?.('');
   };
 
   const commit = (option: ComboboxOption | undefined) => {
@@ -112,6 +129,21 @@ export function Combobox({
     close();
     inputRef.current?.focus();
   };
+
+  /**
+   * The blur-close is deferred so a mousedown on an option lands before the
+   * list unmounts. Tracked in a ref and cleared on unmount so a dialog that
+   * closes inside that window does not leave a timer running against a gone
+   * component.
+   */
+  const blurTimer = useRef<number | undefined>(undefined);
+
+  useEffect(
+    () => () => {
+      if (blurTimer.current !== undefined) window.clearTimeout(blurTimer.current);
+    },
+    [],
+  );
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     switch (event.key) {
@@ -184,12 +216,16 @@ export function Combobox({
         onChange={(event) => {
           if (!isOpen) setIsOpen(true);
           setQuery(event.target.value);
+          onSearchChange?.(event.target.value);
           setActiveIndex(0);
         }}
         onFocus={open}
         // A click outside commits nothing and reverts the text, so what is shown
         // always matches the value actually selected.
-        onBlur={() => window.setTimeout(close, 120)}
+        onBlur={() => {
+          if (blurTimer.current !== undefined) window.clearTimeout(blurTimer.current);
+          blurTimer.current = window.setTimeout(close, 120);
+        }}
         onKeyDown={handleKeyDown}
         className="block w-full rounded-md border-0 px-3 py-2 text-sm text-slate-900 ring-1 ring-inset ring-slate-300 placeholder:text-slate-400 focus:ring-2 focus:ring-inset focus:ring-brand-600 disabled:bg-slate-50 disabled:text-slate-400 aria-[invalid=true]:ring-red-500"
       />

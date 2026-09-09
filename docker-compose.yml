@@ -27,7 +27,11 @@ services:
       NODE_ENV: production
       PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:-cleaning}:${POSTGRES_PASSWORD:-cleaning}@db:5432/${POSTGRES_DB:-cleaning_log}?schema=public
-      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      # No default, on purpose. This service runs with NODE_ENV=production, and
+      # a published secret plus a token whose claims are trusted as-is means
+      # anyone who has read this repository can forge a QA identity. `:?` makes
+      # compose stop with the message below rather than booting insecurely.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env — see .env.example for a one-liner}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       CORS_ORIGIN: http://localhost:${WEB_PORT:-5173}
       LOG_LEVEL: ${LOG_LEVEL:-info}

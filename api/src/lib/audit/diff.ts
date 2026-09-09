@@ -25,9 +25,12 @@ export interface FieldChange {
  *     not a blacklist, which is what keeps `updatedAt` out of every change set
  *     and makes it impossible for a caller to inject arbitrary field names.
  */
+/** `after` may set any tracked field to null, because clearing one is a change. */
+export type AuditableState<T> = { [K in keyof T]?: T[K] | null };
+
 export function diffFields<T extends object>(
   before: Partial<T> | null,
-  after: Partial<T>,
+  after: AuditableState<T>,
   trackedFields: readonly Extract<keyof T, string>[],
 ): FieldChange[] {
   const changes: FieldChange[] = [];

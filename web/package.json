@@ -2,6 +2,9 @@
   "name": "cleaning-log-web",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20.19 <21"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

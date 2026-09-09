@@ -198,6 +198,81 @@ describe.skipIf(!hasDatabase)('API (e2e)', () => {
       expect(badLimit.body.error.code).toBe('VALIDATION_ERROR');
     });
 
+    /**
+     * A cleaning is a record of something that already happened. This rule also
+     * lives in the web form, but that copy is convenience — the client is not
+     * the guard, and this endpoint is reachable without it.
+     */
+    it('refuses a cleaning dated in the future', async () => {
+      const future = new Date(Date.now() + 86_400_000).toISOString();
+
+      const res = await request(app)
+        .post(`/api/v1/equipment/${equipment.id}/cleaning-records`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ ...newRecord, cleanedAt: future });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.details[0]).toMatchObject({
+        field: 'body.cleanedAt',
+        message: 'A cleaning cannot be logged in the future',
+      });
+    });
+
+    it('refuses to move an existing record into the future', async () => {
+      const created = await createRecord();
+      const future = new Date(Date.now() + 86_400_000).toISOString();
+
+      const res = await request(app)
+        .patch(`/api/v1/cleaning-records/${created.body.data.id}`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ cleanedAt: future });
+
+      expect(res.status).toBe(400);
+    });
+
+    it('still accepts a timestamp a few seconds ahead, to absorb clock skew', async () => {
+      const nearlyNow = new Date(Date.now() + 5_000).toISOString();
+
+      await request(app)
+        .post(`/api/v1/equipment/${equipment.id}/cleaning-records`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ ...newRecord, cleanedAt: nearlyNow })
+        .expect(201);
+    });
+
+    /**
+     * A cursor used to carry only "(timestamp, id)", so any list would continue
+     * from it. Paging one equipment and reusing the cursor against another —
+     * or against a different status filter — returned a plausible, wrong page.
+     */
+    it('refuses a cursor minted for a different query', async () => {
+      const other = await makeEquipment();
+      await createRecord();
+      await createRecord();
+
+      const first = await request(app)
+        .get(`/api/v1/equipment/${equipment.id}/cleaning-records?limit=1`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .expect(200);
+
+      const cursor = first.body.meta.nextCursor as string;
+      expect(cursor).toBeTruthy();
+
+      const crossEquipment = await request(app)
+        .get(`/api/v1/equipment/${other.id}/cleaning-records?limit=1&cursor=${cursor}`)
+        .set('Authorization', `Bearer ${operatorToken}`);
+      expect(crossEquipment.status).toBe(400);
+      expect(crossEquipment.body.error.code).toBe('CURSOR_SCOPE_MISMATCH');
+
+      const crossFilter = await request(app)
+        .get(
+          `/api/v1/equipment/${equipment.id}/cleaning-records?limit=1&status=verified&cursor=${cursor}`,
+        )
+        .set('Authorization', `Bearer ${operatorToken}`);
+      expect(crossFilter.status).toBe(400);
+      expect(crossFilter.body.error.code).toBe('CURSOR_SCOPE_MISMATCH');
+    });
+
     it('returns 404 for an unknown equipment rather than an empty page', async () => {
       const res = await request(app)
         .get(`/api/v1/equipment/${randomUUID()}/cleaning-records`)

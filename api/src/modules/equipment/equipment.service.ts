@@ -20,7 +20,7 @@ export interface EquipmentService {
   get(id: string): Promise<Equipment>;
   create(input: CreateEquipmentData, actor: Actor): Promise<Equipment>;
   update(id: string, patch: UpdateEquipmentData, actor: Actor): Promise<Equipment>;
-  remove(id: string): Promise<void>;
+  remove(id: string, actor: Actor): Promise<void>;
 }
 
 export function createEquipmentService(uow: UnitOfWork): EquipmentService {
@@ -72,21 +72,52 @@ export function createEquipmentService(uow: UnitOfWork): EquipmentService {
       });
     },
 
-    async remove(id) {
-      const recordCount = await uow.repos.cleaningRecords.countByEquipment(id);
+    /**
+     * Deletion is audited like any other change, in the same transaction as the
+     * delete itself.
+     *
+     * An unrecorded destructive operation is the one hole a system built around
+     * an audit trail cannot have: without this row the asset simply vanishes
+     * from history with no actor and no timestamp. The change set records every
+     * tracked field moving to null, which is what a deletion is.
+     */
+    async remove(id, actor) {
+      return uow.transaction(async (repos) => {
+        await repos.equipment.lockForUpdate(id);
 
-      // Deleting equipment that has cleaning records would orphan an audit
-      // trail, which is the one thing this system exists to prevent. Retirement
-      // is the correct operation for equipment that has been used.
-      if (recordCount > 0) {
-        throw new ConflictError(
-          'EQUIPMENT_IN_USE',
-          `This equipment has ${recordCount} cleaning record(s) and cannot be deleted. Set its status to 'retired' instead.`,
-        );
-      }
+        // Counted inside the transaction, behind the row lock, so a cleaning
+        // record inserted concurrently cannot slip past the check. The FK is
+        // still the backstop; this is what turns it into a useful message.
+        const recordCount = await repos.cleaningRecords.countByEquipment(id);
 
-      const deleted = await uow.repos.equipment.deleteById(id);
-      if (deleted === 0) throw new NotFoundError('Equipment', id);
+        // Deleting equipment that has cleaning records would orphan an audit
+        // trail, which is the one thing this system exists to prevent.
+        // Retirement is the correct operation for equipment that has been used.
+        if (recordCount > 0) {
+          throw new ConflictError(
+            'EQUIPMENT_IN_USE',
+            `This equipment has ${recordCount} cleaning record(s) and cannot be deleted. Set its status to 'retired' instead.`,
+          );
+        }
+
+        const deleted = await repos.equipment.deleteById(id);
+        if (!deleted) throw new NotFoundError('Equipment', id);
+
+        await repos.audit.record({
+          entityType: 'Equipment',
+          entityId: id,
+          action: 'DELETE',
+          actor,
+          // `after` is an object with every tracked key explicitly null, so the
+          // diff emits one row per field going value -> null. Passing `{}`
+          // would emit nothing, because the diff skips absent keys.
+          changes: diffFields(
+            deleted,
+            Object.fromEntries(EQUIPMENT_TRACKED_FIELDS.map((field) => [field, null])),
+            EQUIPMENT_TRACKED_FIELDS,
+          ),
+        });
+      });
     },
   };
 }

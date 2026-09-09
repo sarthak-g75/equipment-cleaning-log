@@ -31,8 +31,26 @@ export const makeRecord = (overrides: Partial<CleaningRecord> = {}): CleaningRec
   ...overrides,
 });
 
+export const USERS: UserSummary[] = [BOB, ALICE];
+
 export const handlers = [
-  http.get(`${API}/users`, () => HttpResponse.json({ data: [BOB, ALICE] })),
+  /**
+   * Filters server-side, the way the real endpoint does. A handler that ignored
+   * `q` would let a client-side-filtering regression pass unnoticed, which is
+   * exactly the bug this mirrors: the picker used to fetch the whole (capped)
+   * directory once and filter it in the browser.
+   */
+  http.get(`${API}/users`, ({ request }) => {
+    const url = new URL(request.url);
+    const q = url.searchParams.get('q')?.toLowerCase() ?? '';
+    const limit = Number(url.searchParams.get('limit') ?? 50);
+
+    const matches = USERS.filter(
+      (u) => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q),
+    ).slice(0, limit);
+
+    return HttpResponse.json({ data: matches });
+  }),
 
   http.get(`${API}/equipment/:id`, ({ params }) =>
     HttpResponse.json({

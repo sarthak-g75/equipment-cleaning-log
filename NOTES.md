@@ -249,9 +249,38 @@ everything entered since the container came up. The seed now skips a non-empty d
 unless explicitly forced, and there is a manual test in the commit history proving data
 survives a restart.
 
+- **Deletion is audited.** Equipment deletion used to leave no trace: the row vanished
+  with no actor and no timestamp, and the `AuditAction` enum had no `DELETE` to record one
+  with even if you wanted to. It now writes a change set — every tracked field moving to
+  null — in the same transaction as the delete, and the polymorphic `entityId` is what
+  lets that record outlive the row it describes.
+- **Only QA may change the asset register.** Any authenticated operator could previously
+  create, retire or delete equipment, which decides what the whole plant is allowed to log
+  against. Reading it stays open, because an operator has to pick equipment to log a
+  cleaning against.
+- **The API refuses to start with a published secret.** `JWT_SECRET` length was the only
+  check, and `dev-only-secret-change-me` is 25 characters — long enough to pass, and
+  printed in `.env.example` and defaulted in `docker-compose.yml` while the stack ran with
+  `NODE_ENV=production`. Since a validly-signed token's claims are trusted as-is, that was
+  a forgeable QA identity for anyone who had read the repo. Compose now has no default and
+  the config rejects the known values in production.
+- **`cleanedAt` cannot be in the future.** The rule existed only in the web form, and a
+  client is not a guard.
+- **Static assets are cached correctly.** nginx served `index.html` with default caching,
+  so a returning visitor could hold a stale document naming asset hashes that no longer
+  exist after a deploy — a white screen with 404s. Hashed assets are now `immutable`,
+  `index.html` is `no-cache`.
+
 Still not addressed, and honestly so: rate limiting is per-process memory and needs Redis
 behind more than one instance; there is no metrics endpoint or tracing; and there is no
 caching layer.
+
+Two ordering details that are stated rather than solved. Change sets sharing a single
+millisecond are tie-broken on `changeSetId`, which is arbitrary but *stable* — the same
+history cannot render in a different order on refresh, and the row lock serialises writes
+to one record anyway. A monotonic sequence column would make it chronological; it is not
+worth a `BigInt` on every audit row at this size. And `AuditEntry.changedAt` comes from
+application clocks, so multiple API instances could interleave slightly under clock skew.
 
 ## SOLID, and where I stopped
 
@@ -260,10 +289,15 @@ version: services depend on interfaces in `src/shared/ports.ts`, the Prisma adap
 only file that knows the ORM exists, and `src/container.ts` is the one place that wires
 them together.
 
-The payoff is not theoretical — **38 of the 77 API tests now run with no database**,
-because the services can be driven by in-memory fakes. That let the integration suite
-narrow to what genuinely needs Postgres: the keyset query, the row lock, and
-transactional rollback.
+The payoff is not theoretical — **57 of the 121 API tests run with no database**, because
+the services *and now the whole HTTP stack* can be driven by in-memory fakes. That let the
+integration suite narrow to what genuinely needs Postgres: the keyset query, the row lock,
+and transactional rollback.
+
+The one place the claim did not hold was the controllers, which imported the `services`
+singleton from `container.ts` — a service locator pointing the dependency straight at the
+composition root, and the reason no HTTP-level test could run without Postgres. Services
+are now passed into `createApp`, through the router factories, into each controller.
 
 What I deliberately did **not** do, because the brief asks for code that avoids
 over-engineering: no DI container, no abstract factories, no interface-per-class. An
@@ -339,15 +373,23 @@ Roughly in the order I'd add them next.
 
 - **Refresh tokens.** A short-lived access token held in memory, and re-login when it
   expires. In memory rather than `localStorage` because a token in `localStorage` is
-  readable by any injected script; the cost is that a page refresh logs you out. The
-  production shape is an `HttpOnly` refresh cookie with rotation, plus a 401 interceptor
-  that silently retries once.
+  readable by any injected script. Two costs, both real: a page refresh logs you out, and
+  a session longer than `JWT_EXPIRES_IN` (15m) ends mid-task — the 401 interceptor sends
+  the user to the login screen, and an unsaved form goes with it. The production shape is
+  an `HttpOnly` refresh cookie with rotation, plus a 401 interceptor that silently retries
+  once; `AuthProvider` already takes an `initialUser` so a `GET /auth/me` hydration step
+  has somewhere to land.
 - **Optimistic concurrency** on record updates (see above).
 - **Database-enforced append-only audit** (`REVOKE` or a trigger).
 - **Roles beyond `operator` and `qa`**, and permissions finer than a five-line
-  `requireRole`.
-- **Structured logging** with request-id correlation, and rate limiting on `/auth/login`.
-  Both matter in production; neither is visible in a take-home.
+  `requireRole`. Related and deliberate rather than overlooked: any operator may edit any
+  *pending* cleaning record, not only their own. `cleanedBy` records who did the work and
+  the audit actor records who changed the row, so an edit by a colleague is fully
+  attributed rather than anonymous — and on a shift handover that is usually what you
+  want. Restricting it to the author (or to the author plus QA) is a one-line guard in
+  `applyChange` if the process calls for it; it is a policy choice, so it is stated here
+  instead of being assumed. Verification is already role-gated, which is the control that
+  actually matters: nobody can sign off their own work.
 - **OpenAPI generation** from the Zod schemas. The schemas are already the single source of
   truth, so this is mostly wiring.
 - **Reverse keyset pagination** (`prevCursor`), unnecessary given the "Load more" UI.
@@ -361,11 +403,21 @@ Roughly in the order I'd add them next.
 ## What I'd change with more time
 
 - **The audit history endpoint isn't paginated** — it takes a `limit` (default 100, max
-  200) and returns the most recent change sets. That's fine for a record edited a handful
-  of times, and wrong for one edited a thousand times. It should use the same cursor
-  helper the record list uses; I'd rather ship it honestly capped than half-paginated.
+  200) and returns the most recent change sets, plus `meta.hasMore` so a caller can tell
+  a capped trail from a complete one. That's fine for a record edited a handful of times,
+  and wrong for one edited a thousand times. It should use the same cursor helper the
+  record list uses (which is now parameterised over its sort column, so it can be); I'd
+  rather ship it honestly capped than half-paginated.
+
+  Worth stating because it was a bug rather than a limitation: `limit` used to count
+  *rows*, and the table stores one row per changed field. A creation writes six rows, so
+  `?limit=3` returned a single change set holding three of its six fields, with nothing
+  marking the result as partial — an auditor read a complete-looking CREATE that was
+  missing half of what happened. It now counts change sets and never returns a fragment
+  of one.
 - **`AuditEntry.entityId` has no foreign key**, because it's polymorphic across
-  `CleaningRecord` and `Equipment`. That's the standard trade-off for a single generic
+  `CleaningRecord` and `Equipment`. That is also what lets a DELETE change set outlive
+  the row it describes, which is the point of recording one. That's the standard trade-off for a single generic
   audit table, but it does mean referential integrity there is enforced by the application
   rather than the database. A per-entity audit table would fix it at the cost of
   duplicating the whole mechanism per entity.

@@ -1,8 +1,14 @@
 import { Router } from 'express';
 import { validate } from '../../middleware/validate';
+import type { Services } from '../../container';
 import { listUsersQuerySchema } from './user.validation';
-import { listUsersHandler } from './user.controller';
+import { createUserController } from './user.controller';
 
-export const userRouter = Router();
+export function createUserRouter(services: Services): Router {
+  const router = Router();
+  const controller = createUserController(services);
 
-userRouter.get('/', validate({ query: listUsersQuerySchema }), listUsersHandler);
+  router.get('/', validate({ query: listUsersQuerySchema }), controller.list);
+
+  return router;
+}

@@ -8,6 +8,26 @@ export const listRecordsQuerySchema = paginationQuerySchema.extend({
   status: z.enum(['pending', 'verified']).optional(),
 });
 
+/** Tolerance for clock skew between the client's machine and this server. */
+const FUTURE_TOLERANCE_MS = 60_000;
+
+/**
+ * A cleaning is a record of something that has already happened, so a timestamp
+ * in the future is not a valid one.
+ *
+ * This rule also exists in the web form, but that copy is convenience — a
+ * client cannot be trusted to enforce a business rule, and this endpoint is
+ * reachable without it. The minute of tolerance absorbs ordinary clock skew
+ * rather than rejecting a browser that is thirty seconds fast.
+ */
+const cleanedAtSchema = z.iso
+  .datetime({ offset: true })
+  .refine(
+    (value) => Date.parse(value) <= Date.now() + FUTURE_TOLERANCE_MS,
+    'A cleaning cannot be logged in the future',
+  )
+  .transform((value) => new Date(value));
+
 /**
  * `""` is normalised to `null` here, at the boundary, rather than inside the
  * diff. That keeps one decision in one place: the diff stays a dumb comparison,
@@ -28,7 +48,7 @@ const notesSchema = z
 
 export const createRecordBodySchema = z.object({
   cleanedById: z.uuid('Select who performed the cleaning'),
-  cleanedAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value)),
+  cleanedAt: cleanedAtSchema,
   method: z.string().trim().min(1).max(120),
   notes: notesSchema,
 });
@@ -42,10 +62,7 @@ export const createRecordBodySchema = z.object({
 export const updateRecordBodySchema = z
   .object({
     cleanedById: z.uuid('Select who performed the cleaning').optional(),
-    cleanedAt: z.iso
-      .datetime({ offset: true })
-      .transform((value) => new Date(value))
-      .optional(),
+    cleanedAt: cleanedAtSchema.optional(),
     method: z.string().trim().min(1).max(120).optional(),
     notes: notesSchema,
   })

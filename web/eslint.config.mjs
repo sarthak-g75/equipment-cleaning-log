@@ -14,6 +14,11 @@ export default [
         ecmaVersion: 2022,
         sourceType: 'module',
         ecmaFeatures: { jsx: true },
+        // Type-aware linting. Without a program the promise rules below do not
+        // run at all, and those are the ones that catch a mutation or a refetch
+        // whose rejection nobody handles.
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
       },
       globals: {
         window: 'readonly',
@@ -34,6 +39,20 @@ export default [
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/no-non-null-assertion': 'off',
+
+      '@typescript-eslint/no-floating-promises': 'error',
+      '@typescript-eslint/await-thenable': 'error',
+      // An event handler returning a promise is normal in React; an async
+      // function used as a condition is not.
+      '@typescript-eslint/no-misused-promises': ['error', { checksVoidReturn: false }],
+    },
+  },
+  {
+    // Testing Library's helpers are thenable-ish and the assertion style is
+    // deliberately terse, so the promise rules are noise here rather than signal.
+    files: ['**/*.test.{ts,tsx}', 'src/tests/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'off',
     },
   },
 ];

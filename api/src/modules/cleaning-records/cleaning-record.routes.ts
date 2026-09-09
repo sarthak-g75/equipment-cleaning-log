@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { validate } from '../../middleware/validate';
 import { requireRole } from '../../middleware/auth';
+import type { Services } from '../../container';
 import { auditHistoryQuerySchema } from '../audit/audit.validation';
 import {
   createRecordBodySchema,
@@ -9,49 +10,52 @@ import {
   recordIdParamsSchema,
   updateRecordBodySchema,
 } from './cleaning-record.validation';
-import {
-  createRecordHandler,
-  getRecordHandler,
-  listRecordsHandler,
-  recordAuditHandler,
-  updateRecordHandler,
-  verifyRecordHandler,
-} from './cleaning-record.controller';
+import { createCleaningRecordController } from './cleaning-record.controller';
 
 /**
  * Mounted at /equipment/:equipmentId/cleaning-records. `mergeParams` is what
  * makes the parent's :equipmentId visible to this router's validation.
  */
-export const cleaningRecordsByEquipmentRouter = Router({ mergeParams: true });
+export function createCleaningRecordsByEquipmentRouter(services: Services): Router {
+  const router = Router({ mergeParams: true });
+  const controller = createCleaningRecordController(services);
 
-cleaningRecordsByEquipmentRouter.get(
-  '/',
-  validate({ params: equipmentIdParamsSchema, query: listRecordsQuerySchema }),
-  listRecordsHandler,
-);
-cleaningRecordsByEquipmentRouter.post(
-  '/',
-  validate({ params: equipmentIdParamsSchema, body: createRecordBodySchema }),
-  createRecordHandler,
-);
+  router.get(
+    '/',
+    validate({ params: equipmentIdParamsSchema, query: listRecordsQuerySchema }),
+    controller.list,
+  );
+  router.post(
+    '/',
+    validate({ params: equipmentIdParamsSchema, body: createRecordBodySchema }),
+    controller.create,
+  );
+
+  return router;
+}
 
 /** Mounted at /cleaning-records — routes addressed by the record's own id. */
-export const cleaningRecordRouter = Router();
+export function createCleaningRecordRouter(services: Services): Router {
+  const router = Router();
+  const controller = createCleaningRecordController(services);
 
-cleaningRecordRouter.get('/:id', validate({ params: recordIdParamsSchema }), getRecordHandler);
-cleaningRecordRouter.patch(
-  '/:id',
-  validate({ params: recordIdParamsSchema, body: updateRecordBodySchema }),
-  updateRecordHandler,
-);
-cleaningRecordRouter.post(
-  '/:id/verify',
-  requireRole('qa'),
-  validate({ params: recordIdParamsSchema }),
-  verifyRecordHandler,
-);
-cleaningRecordRouter.get(
-  '/:id/audit',
-  validate({ params: recordIdParamsSchema, query: auditHistoryQuerySchema }),
-  recordAuditHandler,
-);
+  router.get('/:id', validate({ params: recordIdParamsSchema }), controller.get);
+  router.patch(
+    '/:id',
+    validate({ params: recordIdParamsSchema, body: updateRecordBodySchema }),
+    controller.update,
+  );
+  router.post(
+    '/:id/verify',
+    requireRole('qa'),
+    validate({ params: recordIdParamsSchema }),
+    controller.verify,
+  );
+  router.get(
+    '/:id/audit',
+    validate({ params: recordIdParamsSchema, query: auditHistoryQuerySchema }),
+    controller.audit,
+  );
+
+  return router;
+}

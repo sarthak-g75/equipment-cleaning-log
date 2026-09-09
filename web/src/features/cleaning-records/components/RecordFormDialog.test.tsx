@@ -20,7 +20,9 @@ const open = (props: Partial<Parameters<typeof RecordFormDialog>[0]> = {}) => {
     />,
   );
 
-  return { onSubmit, onClose };
+  // vi.mocked keeps `.mock` visible on the returned handles; without it the
+  // union with the prop's declared function type hides it from the typechecker.
+  return { onSubmit: vi.mocked(onSubmit), onClose: vi.mocked(onClose) };
 };
 
 describe('RecordFormDialog', () => {
@@ -105,12 +107,84 @@ describe('RecordFormDialog', () => {
       .mockRejectedValue(new ApiError(409, 'RECORD_VERIFIED', 'A verified record cannot be edited.'));
     open({ onSubmit, record: makeRecord() });
 
+    // Something has to actually change, or the dialog short-circuits without a
+    // request — see the PATCH tests below.
+    await user.clear(screen.getByLabelText('Method'));
+    await user.type(screen.getByLabelText('Method'), 'SIP');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalled());
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'A verified record cannot be edited.',
     );
+  });
+
+  /**
+   * An edit used to submit every field whether or not the user touched it,
+   * making the request a PUT wearing a PATCH's name. The API distinguishes
+   * "omitted" from "explicitly null", and the audit trail depends on that
+   * distinction, so re-sending an untouched field means re-auditing it.
+   */
+  describe('an edit sends only what changed', () => {
+    it('reports just the touched field as changed', async () => {
+      const user = userEvent.setup();
+      const { onSubmit } = open({ record: makeRecord({ method: 'CIP - caustic' }) });
+
+      await user.clear(screen.getByLabelText('Method'));
+      await user.type(screen.getByLabelText('Method'), 'SIP');
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+      const changed = onSubmit.mock.calls[0]![1];
+      expect(Object.keys(changed)).toEqual(['method']);
+      expect(changed.method).toBe('SIP');
+      // Crucially absent: the timestamp the user never touched.
+      expect(changed).not.toHaveProperty('cleanedAt');
+    });
+
+    it('reports a cleared note as an explicit change', async () => {
+      const user = userEvent.setup();
+      const { onSubmit } = open({ record: makeRecord({ notes: 'Swab passed' }) });
+
+      await user.clear(screen.getByLabelText('Notes'));
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(Object.keys(onSubmit.mock.calls[0]![1])).toEqual(['notes']);
+    });
+
+    it('makes no request at all when nothing was touched', async () => {
+      const user = userEvent.setup();
+      const { onSubmit, onClose } = open({ record: makeRecord() });
+
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
+      // A round trip here could only ever come back as "provide at least one
+      // field to update".
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The bug this guards: the field was written from UTC getters and read back
+     * as local time, so merely opening a record and saving it shifted
+     * `cleanedAt` by the browser's offset and forged an audit entry.
+     */
+    it('does not treat an untouched timestamp as a change', async () => {
+      const user = userEvent.setup();
+      const record = makeRecord({ cleanedAt: '2026-08-24T08:00:00.000Z' });
+      const { onSubmit } = open({ record });
+
+      expect(screen.getByLabelText('Cleaned at')).toHaveValue('2026-08-24T08:00');
+
+      await user.clear(screen.getByLabelText('Method'));
+      await user.type(screen.getByLabelText('Method'), 'SIP');
+      await user.click(screen.getByRole('button', { name: 'Save changes' }));
+
+      await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(onSubmit.mock.calls[0]![1]).not.toHaveProperty('cleanedAt');
+    });
   });
 
   it('closes on Escape', async () => {

@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import type { CleaningRecord, Equipment, Role, User } from '@prisma/client';
 import { prisma } from '../../src/database/prisma';
-import { signAccessToken } from '../../src/middleware/auth';
+import { signAccessToken } from '../../src/lib/tokens';
 import type { Actor } from '../../src/shared/ports';
 
 let counter = 0;

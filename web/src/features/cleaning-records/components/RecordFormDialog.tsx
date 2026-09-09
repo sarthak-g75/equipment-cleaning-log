@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Dialog } from '../../../components/Dialog';
@@ -7,23 +7,32 @@ import { Field, inputClass } from '../../../components/Field';
 import { Combobox, type ComboboxOption } from '../../../components/Combobox';
 import { useUsers } from '../../users/hooks/useUsers';
 import { ApiError } from '../../../services/apiClient';
-import { toDateTimeLocal } from '../../../utils/format';
+import { toUtcDateTimeLocal } from '../../../utils/format';
 import { recordSchema, type RecordFormValues } from '../validators/recordSchema';
-import type { CleaningRecord } from '../../../types/api';
+import type { CleaningRecord, UserSummary } from '../../../types/api';
 
 interface RecordFormDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (values: RecordFormValues) => Promise<unknown>;
+  /**
+   * `changed` holds only the fields the user actually touched, so an edit sends
+   * a real PATCH. Sending every field on every save made this a PUT in
+   * disguise: the server's "an omitted field is not a change" semantics were
+   * never exercised from the UI, which is part of why a timestamp being
+   * silently rewritten on every save went unnoticed.
+   */
+  onSubmit: (values: RecordFormValues, changed: Partial<RecordFormValues>) => Promise<unknown>;
   /** Present when editing; absent when creating. */
   record?: CleaningRecord | undefined;
   /** The signed-in user, pre-selected as the likeliest cleaner. */
   defaultCleanedById: string;
+  /** Shown in the picker before any search runs, so the selection has a label. */
+  defaultCleanedBy?: UserSummary | undefined;
 }
 
 const emptyValues = (cleanedById: string): RecordFormValues => ({
   cleanedById,
-  cleanedAt: toDateTimeLocal(new Date().toISOString()),
+  cleanedAt: toUtcDateTimeLocal(new Date().toISOString()),
   method: '',
   notes: '',
 });
@@ -34,14 +43,36 @@ export function RecordFormDialog({
   onSubmit,
   record,
   defaultCleanedById,
+  defaultCleanedBy,
 }: RecordFormDialogProps) {
   const isEditing = record !== undefined;
-  const users = useUsers();
 
-  const userOptions = useMemo<ComboboxOption[]>(
-    () => (users.data ?? []).map((u) => ({ value: u.id, label: u.name, hint: u.email })),
-    [users.data],
-  );
+  // The picker filters on the server, so the query it types lives here.
+  const [search, setSearch] = useState('');
+  const users = useUsers(search);
+
+  /**
+   * The already-selected person, kept in the list even when the current search
+   * does not match them. Without this the input would render blank whenever the
+   * server's results happen not to include the current value — the field would
+   * look empty while holding a perfectly good id.
+   */
+  const selectedOption = useMemo<ComboboxOption | null>(() => {
+    const source = record?.cleanedBy ?? defaultCleanedBy;
+    if (!source) return null;
+    return { value: source.id, label: source.name, hint: source.email };
+  }, [record?.cleanedBy, defaultCleanedBy]);
+
+  const userOptions = useMemo<ComboboxOption[]>(() => {
+    const fetched = (users.data ?? []).map((u) => ({
+      value: u.id,
+      label: u.name,
+      hint: u.email,
+    }));
+
+    if (!selectedOption || fetched.some((o) => o.value === selectedOption.value)) return fetched;
+    return [selectedOption, ...fetched];
+  }, [users.data, selectedOption]);
 
   const {
     register,
@@ -49,7 +80,7 @@ export function RecordFormDialog({
     handleSubmit,
     reset,
     setError,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, dirtyFields },
   } = useForm<RecordFormValues>({
     resolver: zodResolver(recordSchema),
     defaultValues: emptyValues(defaultCleanedById),
@@ -59,11 +90,15 @@ export function RecordFormDialog({
   // this the previous record's values persist, because RHF keeps its state.
   useEffect(() => {
     if (!isOpen) return;
+    // The picker's own query is cleared by the Combobox when it opens and when
+    // it closes, so there is nothing to reset here — and resetting state from
+    // inside an effect is the render loop this rule exists to prevent. Until
+    // the user focuses the picker, `selectedOption` keeps the field labelled.
     reset(
       record
         ? {
             cleanedById: record.cleanedById,
-            cleanedAt: toDateTimeLocal(record.cleanedAt),
+            cleanedAt: toUtcDateTimeLocal(record.cleanedAt),
             method: record.method,
             notes: record.notes ?? '',
           }
@@ -72,8 +107,24 @@ export function RecordFormDialog({
   }, [isOpen, record, defaultCleanedById, reset]);
 
   const submit = handleSubmit(async (values) => {
+    // Only what the user touched. `dirtyFields` is RHF's own comparison against
+    // the values the form was reset with, so an untouched timestamp is simply
+    // absent from the request rather than being re-sent and re-audited.
+    const changed = Object.fromEntries(
+      (Object.keys(values) as (keyof RecordFormValues)[])
+        .filter((key) => dirtyFields[key])
+        .map((key) => [key, values[key]]),
+    ) as Partial<RecordFormValues>;
+
+    // Nothing to save. Closing beats a round trip that can only come back as
+    // "provide at least one field to update".
+    if (isEditing && Object.keys(changed).length === 0) {
+      onClose();
+      return;
+    }
+
     try {
-      await onSubmit(values);
+      await onSubmit(values, changed);
       onClose();
     } catch (error) {
       if (!(error instanceof ApiError)) {
@@ -124,6 +175,9 @@ export function RecordFormDialog({
                 options={userOptions}
                 value={field.value ?? null}
                 onChange={field.onChange}
+                // Filtering happens on the server, so the whole directory is
+                // reachable rather than just the first page of it.
+                onSearchChange={setSearch}
                 isLoading={users.isPending}
                 disabled={users.isError}
                 placeholder="Search people…"

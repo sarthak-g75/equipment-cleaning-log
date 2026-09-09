@@ -140,7 +140,8 @@ const RecordRow = memo(function RecordRow({
         <tr id={`audit-${record.id}`}>
           <td colSpan={6} className="bg-slate-50 px-3 py-3">
             <AuditTrail
-              changeSets={audit.data}
+              changeSets={audit.data?.data}
+              meta={audit.data?.meta}
               isLoading={audit.isLoading}
               error={audit.error}
               onRetry={() => void audit.refetch()}

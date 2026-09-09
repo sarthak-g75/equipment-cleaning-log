@@ -1,13 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { AuditEntity, Prisma, PrismaClient } from '@prisma/client';
-import {
-  KEYSET_ORDER_BY,
-  decodeCursor,
-  keysetWhere,
-  toPage,
-} from '../lib/pagination';
+import { recordListScope, recordPaginator } from '../lib/pagination';
 import type {
   AuditRepository,
+  AuditRowPage,
   CleaningRecordRepository,
   CreateEquipmentData,
   CreateRecordData,
@@ -47,7 +43,8 @@ class PrismaCleaningRecordRepository implements CleaningRecordRepository {
   constructor(private readonly db: DbClient) {}
 
   async listByEquipment(params: ListRecordsParams) {
-    const cursor = params.cursor ? decodeCursor(params.cursor) : undefined;
+    const scope = recordListScope(params);
+    const cursor = params.cursor ? recordPaginator.decode(params.cursor, scope) : undefined;
 
     const rows = await this.db.cleaningRecord.findMany({
       where: {
@@ -55,15 +52,15 @@ class PrismaCleaningRecordRepository implements CleaningRecordRepository {
         ...(params.status ? { status: params.status } : {}),
         // Sibling keys are ANDed, so the keyset predicate composes with the
         // status filter with no special casing.
-        ...keysetWhere(cursor),
+        ...recordPaginator.where(cursor),
       },
-      // Must stay in lockstep with the comparison in keysetWhere().
-      orderBy: [...KEYSET_ORDER_BY],
+      // From the same paginator as the predicate above, so the two cannot drift.
+      orderBy: [...recordPaginator.orderBy],
       take: params.limit + 1,
       include: cleanerSelect,
     });
 
-    return toPage(rows, params.limit);
+    return recordPaginator.toPage(rows, params.limit, scope);
   }
 
   findById(id: string) {
@@ -104,6 +101,13 @@ class PrismaEquipmentRepository implements EquipmentRepository {
     return this.db.equipment.findUnique({ where: { id } });
   }
 
+  findManyByIds(ids: readonly string[]) {
+    return this.db.equipment.findMany({
+      where: { id: { in: [...ids] } },
+      select: { id: true, name: true, code: true },
+    });
+  }
+
   create(data: CreateEquipmentData) {
     return this.db.equipment.create({ data });
   }
@@ -112,9 +116,16 @@ class PrismaEquipmentRepository implements EquipmentRepository {
     return this.db.equipment.update({ where: { id }, data });
   }
 
+  /**
+   * Returns the row as it stood before deletion, because the caller has to
+   * audit what was destroyed and those values are unrecoverable afterwards.
+   * Null means there was nothing to delete, which the caller turns into a 404.
+   */
   async deleteById(id: string) {
-    const { count } = await this.db.equipment.deleteMany({ where: { id } });
-    return count;
+    const existing = await this.db.equipment.findUnique({ where: { id } });
+    if (!existing) return null;
+    await this.db.equipment.delete({ where: { id } });
+    return existing;
   }
 
   async lockForUpdate(id: string): Promise<void> {
@@ -141,9 +152,10 @@ class PrismaUserRepository implements UserRepository {
       },
       select: userSummarySelect,
       orderBy: { name: 'asc' },
-      // A hard cap: the picker filters server-side, so it never needs the whole
-      // table, and an unbounded directory endpoint is a latent scaling problem.
-      take: 50,
+      // A hard cap. The picker now sends its query to the server as the user
+      // types, so it never needs the whole table, and an unbounded directory
+      // endpoint is a latent scaling problem.
+      take: params.limit,
     });
   }
 
@@ -189,14 +201,48 @@ class PrismaAuditRepository implements AuditRepository {
     });
   }
 
-  findByEntity(entityType: AuditEntity, entityId: string, limit: number) {
-    return this.db.auditEntry.findMany({
+  /**
+   * Two queries, deliberately.
+   *
+   * The first picks the newest `limit` CHANGE SETS; the second fetches every
+   * row belonging to them. Applying the limit to rows instead — which is what
+   * a bare `take: limit` does — cuts through the middle of an event and
+   * returns, say, three of a creation's six fields with nothing marking the
+   * result as partial.
+   *
+   * `groupBy` rather than `distinct`: groupBy is a real SQL GROUP BY, whereas
+   * Prisma may apply `distinct` after the fact, and therefore after `take`.
+   */
+  async findByEntity(
+    entityType: AuditEntity,
+    entityId: string,
+    limit: number,
+  ): Promise<AuditRowPage> {
+    const groups = await this.db.auditEntry.groupBy({
+      by: ['changeSetId'],
       where: { entityType, entityId },
-      // Newest change set first; `field` ascending keeps lines within one set in
-      // a stable order rather than whatever the planner returns.
-      orderBy: [{ changedAt: 'desc' }, { changeSetId: 'desc' }, { field: 'asc' }],
-      take: limit,
+      _max: { changedAt: true },
+      orderBy: [{ _max: { changedAt: 'desc' } }, { changeSetId: 'desc' }],
+      // Over-fetch by one to answer "were older change sets withheld?" without
+      // a second COUNT.
+      take: limit + 1,
     });
+
+    const hasMore = groups.length > limit;
+    const ids = groups.slice(0, limit).map((group) => group.changeSetId);
+    if (ids.length === 0) return { data: [], hasMore: false };
+
+    const data = await this.db.auditEntry.findMany({
+      where: { entityType, entityId, changeSetId: { in: ids } },
+      // Newest change set first. `changeSetId` is the tie-break between two
+      // sets sharing a millisecond: arbitrary, but stable across queries, so
+      // the same history cannot render in a different order on refresh.
+      // `field` ascending keeps the lines within one set stable too, rather
+      // than whatever order the planner happens to return.
+      orderBy: [{ changedAt: 'desc' }, { changeSetId: 'desc' }, { field: 'asc' }],
+    });
+
+    return { data, hasMore };
   }
 }
 

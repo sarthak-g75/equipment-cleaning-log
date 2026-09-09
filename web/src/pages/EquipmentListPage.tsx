@@ -6,6 +6,7 @@ import { Button } from '../components/Button';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState, ErrorState, LoadingRows } from '../components/States';
 import { ApiError } from '../services/apiClient';
+import { useAuth } from '../features/auth/AuthContext';
 import {
   useCreateEquipment,
   useDeleteEquipment,
@@ -21,6 +22,11 @@ const STATUS_FILTERS: ReadonlyArray<{ value: EquipmentStatus | undefined; label:
 ];
 
 export function EquipmentListPage() {
+  // Managing the asset register is a QA action server-side, so the UI must not
+  // offer buttons that can only come back as a 403. Reading it stays open.
+  const { user } = useAuth();
+  const canManage = user?.role === 'qa';
+
   // Filter in the URL so a filtered view is shareable and survives a refresh.
   const [searchParams, setSearchParams] = useSearchParams();
   const raw = searchParams.get('status');
@@ -74,7 +80,7 @@ export function EquipmentListPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-900">Equipment</h1>
-        <Button onClick={openCreate}>Add equipment</Button>
+        {canManage && <Button onClick={openCreate}>Add equipment</Button>}
       </div>
 
       <div role="group" aria-label="Filter by status" className="flex gap-1">
@@ -96,6 +102,7 @@ export function EquipmentListPage() {
         isError={equipment.isError}
         items={equipment.data}
         status={status}
+        canManage={canManage}
         onRetry={() => void equipment.refetch()}
         onCreate={openCreate}
         onClearFilter={() => setStatus(undefined)}
@@ -132,6 +139,7 @@ interface EquipmentBodyProps {
   isError: boolean;
   items: Equipment[] | undefined;
   status: EquipmentStatus | undefined;
+  canManage: boolean;
   onRetry: () => void;
   onCreate: () => void;
   onClearFilter: () => void;
@@ -144,6 +152,7 @@ function EquipmentBody({
   isError,
   items,
   status,
+  canManage,
   onRetry,
   onCreate,
   onClearFilter,
@@ -158,18 +167,22 @@ function EquipmentBody({
       <EmptyState
         title={status ? `No ${status} equipment` : 'No equipment yet'}
         description={
-          status ? 'Try clearing the filter.' : 'Add the first piece of equipment to track.'
+          status
+            ? 'Try clearing the filter.'
+            : canManage
+              ? 'Add the first piece of equipment to track.'
+              : 'Ask a QA user to add equipment.'
         }
         action={
           status ? (
             <Button variant="secondary" size="sm" onClick={onClearFilter}>
               Clear filter
             </Button>
-          ) : (
+          ) : canManage ? (
             <Button size="sm" onClick={onCreate}>
               Add equipment
             </Button>
-          )
+          ) : undefined
         }
       />
     );
@@ -197,14 +210,16 @@ function EquipmentBody({
             <code className="mt-1 block text-xs text-slate-500">{item.code}</code>
           </div>
 
-          <div className="mt-4 flex justify-end gap-1 border-t border-slate-100 pt-3">
-            <Button variant="secondary" size="sm" onClick={() => onEdit(item)}>
-              Edit
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => onDelete(item)}>
-              Delete
-            </Button>
-          </div>
+          {canManage && (
+            <div className="mt-4 flex justify-end gap-1 border-t border-slate-100 pt-3">
+              <Button variant="secondary" size="sm" onClick={() => onEdit(item)}>
+                Edit
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => onDelete(item)}>
+                Delete
+              </Button>
+            </div>
+          )}
         </li>
       ))}
     </ul>

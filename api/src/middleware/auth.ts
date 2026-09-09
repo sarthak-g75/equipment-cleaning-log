@@ -1,16 +1,9 @@
 import type { NextFunction, Request, Response } from 'express';
-import jwt from 'jsonwebtoken';
-import { z } from 'zod';
 import type { Role } from '@prisma/client';
-import { config } from '../config';
 import { ForbiddenError, UnauthorizedError } from '../lib/errors';
+import { verifyAccessToken, type AuthenticatedUser } from '../lib/tokens';
 
-export interface AuthenticatedUser {
-  readonly id: string;
-  readonly email: string;
-  readonly name: string;
-  readonly role: Role;
-}
+export type { AuthenticatedUser } from '../lib/tokens';
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -21,25 +14,13 @@ declare global {
   }
 }
 
-const claimsSchema = z.object({
-  sub: z.uuid(),
-  email: z.email(),
-  name: z.string().min(1),
-  role: z.enum(['operator', 'qa']),
-});
-
-export function signAccessToken(user: AuthenticatedUser): string {
-  return jwt.sign(
-    { sub: user.id, email: user.email, name: user.name, role: user.role },
-    config.jwt.secret,
-    { expiresIn: config.jwt.expiresIn as jwt.SignOptions['expiresIn'] },
-  );
-}
-
 /**
  * Identity comes from the verified token and nowhere else. Nothing downstream —
  * including the audit trail's "who" — may read an actor from the request body,
  * which would let any caller forge attribution.
+ *
+ * Token mechanics live in `lib/tokens.ts`; this module only translates them
+ * into HTTP outcomes.
  */
 export function requireAuth(req: Request, _res: Response, next: NextFunction): void {
   const header = req.headers.authorization;
@@ -48,28 +29,13 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction): v
     return;
   }
 
-  let payload: unknown;
-  try {
-    payload = jwt.verify(header.slice('Bearer '.length), config.jwt.secret);
-  } catch {
-    // Deliberately opaque: distinguishing "expired" from "malformed" from
-    // "wrong signature" tells an attacker more than it helps a legitimate client.
+  const user = verifyAccessToken(header.slice('Bearer '.length));
+  if (!user) {
     next(new UnauthorizedError('The access token is invalid or has expired.'));
     return;
   }
 
-  const claims = claimsSchema.safeParse(payload);
-  if (!claims.success) {
-    next(new UnauthorizedError('The access token is invalid or has expired.'));
-    return;
-  }
-
-  req.user = {
-    id: claims.data.sub,
-    email: claims.data.email,
-    name: claims.data.name,
-    role: claims.data.role,
-  };
+  req.user = user;
   next();
 }
 

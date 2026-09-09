@@ -2,7 +2,8 @@ import express, { type Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { config } from './config';
-import { apiRouter } from './routes';
+import { services as defaultServices, type Services } from './container';
+import { createApiRouter } from './routes';
 import { healthRouter } from './modules/health/health.routes';
 import { requestLogger } from './middleware/request-logger';
 import { globalRateLimiter } from './middleware/rate-limit';
@@ -12,12 +13,15 @@ import { errorHandler, notFoundHandler } from './middleware/error-handler';
  * Builds the app without calling listen(), so supertest can mount it directly
  * and the e2e suite needs no real port.
  *
+ * `services` is a parameter, defaulting to the real composition root, so a test
+ * can mount the whole HTTP stack over in-memory fakes without a database.
+ *
  * Middleware order is deliberate: logging first so every request is recorded
  * including ones later middleware rejects, then the security headers, then the
  * rate limiter (before body parsing, so an abusive client is turned away before
  * we spend memory parsing its payload).
  */
-export function createApp(): Express {
+export function createApp(services: Services = defaultServices): Express {
   const app = express();
 
   // Rate limiting and request logs are only correct behind a proxy if Express
@@ -32,7 +36,7 @@ export function createApp(): Express {
   app.use(express.json({ limit: '100kb' }));
 
   app.use('/health', healthRouter);
-  app.use('/api/v1', apiRouter);
+  app.use('/api/v1', createApiRouter(services));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

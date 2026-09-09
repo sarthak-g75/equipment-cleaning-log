@@ -26,7 +26,11 @@ RUN npm ci --omit=dev
 
 # The Prisma CLI is needed at start for `migrate deploy`, and generate needs the
 # schema. The seed runs as compiled JS, so tsx is deliberately not installed.
-RUN npm install --no-save prisma@6.19.3
+#
+# The version is read from package.json rather than repeated here: prisma and
+# @prisma/client must be the same major, and a hardcoded literal in a second
+# place is a pin that silently drifts out of step with the one that matters.
+RUN npm install --no-save "prisma@$(node -p "require('./package.json').devDependencies.prisma")"
 COPY prisma ./prisma
 RUN npx prisma generate
 

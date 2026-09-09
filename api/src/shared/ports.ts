@@ -71,9 +71,20 @@ export type UpdateEquipmentData = Partial<CreateEquipmentData>;
 export interface EquipmentRepository {
   list(status?: EquipmentStatus): Promise<Equipment[]>;
   findById(id: string): Promise<Equipment | null>;
+  /**
+   * Batched lookup for the audit trail's reference resolver. Without it the
+   * resolver has to read the whole table and filter in memory, which is an
+   * unbounded read on every audit request.
+   */
+  findManyByIds(ids: readonly string[]): Promise<Pick<Equipment, 'id' | 'name' | 'code'>[]>;
   create(data: CreateEquipmentData): Promise<Equipment>;
   update(id: string, data: UpdateEquipmentData): Promise<Equipment>;
-  deleteById(id: string): Promise<number>;
+  /**
+   * Returns the row as it stood immediately before deletion, or null if there
+   * was nothing to delete. The caller needs those values to write the DELETE
+   * change set — after the row is gone they cannot be recovered.
+   */
+  deleteById(id: string): Promise<Equipment | null>;
   lockForUpdate(id: string): Promise<void>;
 }
 
@@ -82,6 +93,8 @@ export type UserSummary = Pick<User, 'id' | 'name' | 'email' | 'role'>;
 export interface ListUsersParams {
   readonly role?: User['role'] | undefined;
   readonly q?: string | undefined;
+  /** Hard cap on rows returned. The directory endpoint is never unbounded. */
+  readonly limit: number;
 }
 
 export interface UserRepository {
@@ -103,9 +116,26 @@ export interface RecordChangesInput {
   readonly changes: readonly FieldChange[];
 }
 
+/**
+ * A page of audit rows, already grouped-safe: `data` never contains a partial
+ * change set, and `hasMore` says whether older change sets were withheld.
+ */
+export interface AuditRowPage {
+  readonly data: AuditEntry[];
+  readonly hasMore: boolean;
+}
+
 export interface AuditRepository {
   record(input: RecordChangesInput): Promise<void>;
-  findByEntity(entityType: AuditEntity, entityId: string, limit: number): Promise<AuditEntry[]>;
+  /**
+   * `limit` counts CHANGE SETS, not rows.
+   *
+   * The table holds one row per changed field, so a row limit cuts through the
+   * middle of an event and hands back a CREATE missing half its fields, with
+   * nothing to say it was truncated. For an audit trail that is worse than
+   * returning less: it is a complete-looking lie.
+   */
+  findByEntity(entityType: AuditEntity, entityId: string, limit: number): Promise<AuditRowPage>;
 }
 
 /** Every repository, bound to one database context. */

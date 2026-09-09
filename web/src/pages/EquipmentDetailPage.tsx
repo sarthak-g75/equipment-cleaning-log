@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { CleaningRecord, RecordStatus } from '../types/api';
 import { Badge } from '../components/Badge';
@@ -40,7 +40,14 @@ export function EquipmentDetailPage() {
   const records = useCleaningRecords(equipmentId, status);
   const createRecord = useCreateRecord(equipmentId);
   const updateRecord = useUpdateRecord(equipmentId);
-  const verifyRecord = useVerifyRecord(equipmentId);
+  // Destructured so the callback below can depend on the stable `mutate`
+  // reference rather than on the mutation result object, which useMutation
+  // recreates on every render.
+  const {
+    mutate: verifyRecord,
+    isPending: isVerifying,
+    variables: verifyingRecordId,
+  } = useVerifyRecord(equipmentId);
 
   const setStatus = (next: RecordStatus | undefined) => {
     setSearchParams(next ? { status: next } : {}, { replace: true });
@@ -57,9 +64,20 @@ export function EquipmentDetailPage() {
     setIsFormOpen(true);
   }, []);
 
-  const handleVerify = useCallback((id: string) => verifyRecord.mutate(id), [verifyRecord]);
+  /**
+   * Stable across renders, which is what the memoised rows in RecordsTable rely
+   * on. This previously depended on the whole `useVerifyRecord()` result — a
+   * fresh object every render — so the callback identity changed every render
+   * and every row re-rendered anyway, defeating the memo the table was built
+   * around.
+   */
+  const handleVerify = useCallback((id: string) => verifyRecord(id), [verifyRecord]);
 
-  const rows = records.data?.pages.flatMap((page) => page.data) ?? [];
+  // Memoised so the flattened array is not a new reference on every render.
+  const rows = useMemo(
+    () => records.data?.pages.flatMap((page) => page.data) ?? [],
+    [records.data],
+  );
   const isRetired = equipment.data?.status === 'retired';
 
   return (
@@ -146,7 +164,7 @@ export function EquipmentDetailPage() {
               canVerify={user?.role === 'qa'}
               onEdit={openEdit}
               onVerify={handleVerify}
-              verifyingId={verifyRecord.isPending ? verifyRecord.variables : null}
+              verifyingId={isVerifying ? (verifyingRecordId ?? null) : null}
             />
             <div className="flex items-center justify-between border-t border-slate-200 px-3 py-2.5">
               <p className="text-xs text-slate-500">
@@ -174,9 +192,11 @@ export function EquipmentDetailPage() {
         onClose={() => setIsFormOpen(false)}
         record={editing ?? undefined}
         defaultCleanedById={user?.id ?? ''}
-        onSubmit={(values) =>
+        defaultCleanedBy={user ?? undefined}
+        onSubmit={(values, changed) =>
           editing
-            ? updateRecord.mutateAsync({ id: editing.id, values })
+            ? // Only the touched fields, so this is a PATCH rather than a PUT.
+              updateRecord.mutateAsync({ id: editing.id, values: changed })
             : createRecord.mutateAsync(values)
         }
       />

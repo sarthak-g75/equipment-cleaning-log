@@ -26,6 +26,17 @@ export interface AuditChangeSet {
 }
 
 /**
+ * `hasMore` is part of the contract, not a nicety: this endpoint is capped
+ * rather than paginated, and a consumer that cannot tell "this is all of it"
+ * from "this is the newest slice of it" will read a truncated trail as a
+ * complete one.
+ */
+export interface AuditHistoryPage {
+  readonly data: readonly AuditChangeSet[];
+  readonly meta: { readonly limit: number; readonly hasMore: boolean };
+}
+
+/**
  * Describes how to turn the ids held by one audit field into display labels.
  *
  * A registry rather than a switch: adding a new referenced entity means adding
@@ -49,17 +60,18 @@ export const DEFAULT_REFERENCE_RESOLVERS: readonly ReferenceResolver[] = [
   {
     field: 'equipmentId',
     async resolve(ids, repos) {
-      const all = await repos.equipment.list();
-      return new Map(
-        all.filter((item) => ids.includes(item.id)).map((item) => [item.id, `${item.name} (${item.code})`]),
-      );
+      // Fetches exactly the referenced rows. Reading the whole table and
+      // filtering in memory — which is what this used to do — is an unbounded
+      // read on every audit request, and grows with the asset register.
+      const equipment = await repos.equipment.findManyByIds(ids);
+      return new Map(equipment.map((item) => [item.id, `${item.name} (${item.code})`]));
     },
   },
 ];
 
 export interface AuditService {
-  getRecordHistory(recordId: string, query: AuditHistoryQuery): Promise<AuditChangeSet[]>;
-  getEquipmentHistory(equipmentId: string, query: AuditHistoryQuery): Promise<AuditChangeSet[]>;
+  getRecordHistory(recordId: string, query: AuditHistoryQuery): Promise<AuditHistoryPage>;
+  getEquipmentHistory(equipmentId: string, query: AuditHistoryQuery): Promise<AuditHistoryPage>;
 }
 
 export function createAuditService(
@@ -104,7 +116,8 @@ export function createAuditService(
    *
    * Grouped in application code rather than SQL because the row count per
    * record is small, and a GROUP BY with array aggregation would be far harder
-   * to read for no measurable gain at this scale.
+   * to read for no measurable gain at this scale. The repository guarantees
+   * every change set arrives whole, so no group here can be partial.
    */
   function groupByChangeSet(
     rows: readonly AuditEntry[],
@@ -147,9 +160,14 @@ export function createAuditService(
     entityType: AuditEntity,
     entityId: string,
     query: AuditHistoryQuery,
-  ): Promise<AuditChangeSet[]> {
-    const rows = await uow.repos.audit.findByEntity(entityType, entityId, query.limit);
-    return groupByChangeSet(rows, await resolveLabels(rows));
+  ): Promise<AuditHistoryPage> {
+    const page = await uow.repos.audit.findByEntity(entityType, entityId, query.limit);
+    const labels = await resolveLabels(page.data);
+
+    return {
+      data: groupByChangeSet(page.data, labels),
+      meta: { limit: query.limit, hasMore: page.hasMore },
+    };
   }
 
   return {

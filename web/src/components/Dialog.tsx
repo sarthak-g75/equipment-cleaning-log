@@ -30,6 +30,24 @@ export function Dialog({ isOpen, title, onClose, children }: DialogProps) {
   const triggerRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
 
+  /**
+   * `onClose` is held in a ref, and deliberately NOT an effect dependency.
+   *
+   * Every call site passes an inline arrow (`onClose={() => setOpen(false)}`),
+   * so its identity changes on every parent render. With it in the dependency
+   * array the whole effect tore down and re-ran whenever the parent re-rendered
+   * for any unrelated reason — a background refetch settling, a mutation
+   * changing state. Each teardown ran the cleanup, which focuses the trigger
+   * *behind* the dialog, and each re-run then focused the first field again. The
+   * visible symptom was focus jumping out of whatever the user was typing in,
+   * mid-keystroke. The ref keeps the handler current without making the effect
+   * depend on its identity.
+   */
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   const focusables = useCallback(
     () => Array.from(panelRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []),
     [],
@@ -44,8 +62,7 @@ export function Dialog({ isOpen, title, onClose, children }: DialogProps) {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -75,7 +92,9 @@ export function Dialog({ isOpen, title, onClose, children }: DialogProps) {
       document.body.style.overflow = overflow;
       triggerRef.current?.focus();
     };
-  }, [isOpen, onClose, focusables]);
+    // Runs once per open/close, not once per parent render. `focusables` is
+    // stable; `onClose` is read through the ref above.
+  }, [isOpen, focusables]);
 
   if (!isOpen) return null;
 

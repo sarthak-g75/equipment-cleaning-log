@@ -2,10 +2,16 @@ import { Router } from 'express';
 import { validate } from '../../middleware/validate';
 import { requireAuth } from '../../middleware/auth';
 import { authRateLimiter } from '../../middleware/rate-limit';
+import type { Services } from '../../container';
 import { loginBodySchema } from './auth.validation';
-import { loginHandler, meHandler } from './auth.controller';
+import { createAuthController } from './auth.controller';
 
-export const authRouter = Router();
+export function createAuthRouter(services: Services): Router {
+  const router = Router();
+  const controller = createAuthController(services);
 
-authRouter.post('/login', authRateLimiter, validate({ body: loginBodySchema }), loginHandler);
-authRouter.get('/me', requireAuth, meHandler);
+  router.post('/login', authRateLimiter, validate({ body: loginBodySchema }), controller.login);
+  router.get('/me', requireAuth, controller.me);
+
+  return router;
+}

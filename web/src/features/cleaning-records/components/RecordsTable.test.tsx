@@ -93,6 +93,7 @@ describe('RecordsTable', () => {
               ],
             },
           ],
+          meta: { limit: 100, hasMore: false },
         });
       }),
     );
@@ -157,5 +158,80 @@ describe('RecordsTable', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the audit trail.');
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+  /**
+   * The history endpoint is capped, not paginated. If the UI renders a
+   * truncated trail without saying so, an auditor reads the newest slice as the
+   * whole history — the precise failure this feature exists to prevent.
+   */
+  it('says so when the audit trail is truncated', async () => {
+    server.use(
+      http.get(`${API}/cleaning-records/:id/audit`, () =>
+        HttpResponse.json({
+          data: [
+            {
+              changeSetId: 'cs-1',
+              action: 'UPDATE',
+              changedAt: '2026-08-25T10:00:00.000Z',
+              actor: { id: 'u1', name: 'Alice Chen' },
+              changes: [{ field: 'method', oldValue: 'CIP - caustic', newValue: 'SIP' }],
+            },
+          ],
+          meta: { limit: 1, hasMore: true },
+        }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    renderWithProviders(
+      <RecordsTable
+        records={records}
+        canVerify={false}
+        onEdit={noop}
+        onVerify={noop}
+        verifyingId={null}
+      />,
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'History' })[0]!);
+
+    expect(
+      await screen.findByText(/Showing the 1 most recent changes\. Older changes are not shown\./),
+    ).toBeInTheDocument();
+  });
+
+  it('does not claim truncation when the trail is complete', async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get(`${API}/cleaning-records/:id/audit`, () =>
+        HttpResponse.json({
+          data: [
+            {
+              changeSetId: 'cs-1',
+              action: 'CREATE',
+              changedAt: '2026-08-24T08:05:00.000Z',
+              actor: { id: 'u1', name: 'Alice Chen' },
+              changes: [{ field: 'method', oldValue: null, newValue: 'CIP - caustic' }],
+            },
+          ],
+          meta: { limit: 100, hasMore: false },
+        }),
+      ),
+    );
+
+    renderWithProviders(
+      <RecordsTable
+        records={records}
+        canVerify={false}
+        onEdit={noop}
+        onVerify={noop}
+        verifyingId={null}
+      />,
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'History' })[0]!);
+    await screen.findByText('Alice Chen');
+
+    expect(screen.queryByText(/Older changes are not shown/)).not.toBeInTheDocument();
   });
 });

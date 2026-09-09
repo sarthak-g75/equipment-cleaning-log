@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { AuditEntity, AuditEntry, CleaningRecord, Equipment } from '@prisma/client';
-import { toPage } from '../../src/lib/pagination';
+import { recordListScope, recordPaginator } from '../../src/lib/pagination';
 import type {
+  AuditRowPage,
   CleaningRecordWithCleaner,
   Repositories,
   UnitOfWork,
@@ -12,17 +13,21 @@ import type {
  * In-memory implementations of the ports, for unit-testing services with no
  * database.
  *
- * These are deliberately simple: they store rows in arrays and implement only
- * the behaviour the services actually rely on. A fake that reimplements the
- * database faithfully is a second database to maintain, and its bugs look
- * exactly like passing tests — which is why the keyset query, the row lock and
- * transactional rollback are proven against real Postgres in the integration
- * suite instead of being simulated here.
+ * These are deliberately simple — rows in arrays — but they are *faithful*
+ * about behaviour the services can observe. That distinction matters: a fake
+ * that quietly ignores a parameter (an earlier version of this file dropped
+ * `cursor` entirely and sorted without the id tie-break) makes a broken test
+ * pass, which is worse than not having the test. Where faithfully imitating
+ * Postgres is not worth it, the fake throws instead of pretending.
+ *
+ * What is still proven only against real Postgres, because only a real database
+ * can prove it: the row lock's exclusion, and transactional rollback.
  */
 export interface InMemoryUnitOfWork extends UnitOfWork {
   seedEquipment(equipment: Partial<Equipment> & Pick<Equipment, 'id' | 'code'>): void;
   seedUser(user: Pick<UserSummary, 'id' | 'name'> & Partial<UserSummary>): void;
   allRecords(): CleaningRecordWithCleaner[];
+  allEquipment(): Equipment[];
   allAudit(): AuditEntry[];
   auditFor(entityId: string): AuditEntry[];
   clearAudit(): void;
@@ -33,7 +38,7 @@ export interface InMemoryUnitOfWork extends UnitOfWork {
 export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
   const equipment: Equipment[] = [];
   const users: UserSummary[] = [];
-  let records: CleaningRecordWithCleaner[] = [];
+  const records: CleaningRecordWithCleaner[] = [];
   let audit: AuditEntry[] = [];
   const calls: string[] = [];
 
@@ -49,12 +54,31 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
 
   const repos: Repositories = {
     cleaningRecords: {
+      /**
+       * A real keyset walk, including the `id` tie-break and the cursor scope
+       * check, so a unit test that pages through results is testing something.
+       */
       async listByEquipment(params) {
+        const scope = recordListScope(params);
+        const cursor = params.cursor ? recordPaginator.decode(params.cursor, scope) : undefined;
+
         const matching = records
           .filter((r) => r.equipmentId === params.equipmentId)
           .filter((r) => (params.status ? r.status === params.status : true))
-          .sort((a, b) => b.cleanedAt.getTime() - a.cleanedAt.getTime());
-        return toPage(matching.slice(0, params.limit + 1), params.limit);
+          // ORDER BY cleanedAt DESC, id DESC — the same total order the index
+          // gives, tie-break included.
+          .sort(
+            (a, b) =>
+              b.cleanedAt.getTime() - a.cleanedAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+          )
+          .filter((r) => {
+            if (!cursor) return true;
+            const t = r.cleanedAt.getTime();
+            const c = cursor.sortValue.getTime();
+            return t < c || (t === c && r.id < cursor.id);
+          });
+
+        return recordPaginator.toPage(matching.slice(0, params.limit + 1), params.limit, scope);
       },
       async findById(id) {
         calls.push(`findById:${id}`);
@@ -109,6 +133,11 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
       async findById(id) {
         return equipment.find((e) => e.id === id) ?? null;
       },
+      async findManyByIds(ids) {
+        return equipment
+          .filter((e) => ids.includes(e.id))
+          .map((e) => ({ id: e.id, name: e.name, code: e.code }));
+      },
       async create(data) {
         const now = new Date();
         const created: Equipment = {
@@ -130,10 +159,10 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
         return updated;
       },
       async deleteById(id) {
-        const before = equipment.length;
         const index = equipment.findIndex((e) => e.id === id);
-        if (index >= 0) equipment.splice(index, 1);
-        return before - equipment.length;
+        if (index === -1) return null;
+        const [removed] = equipment.splice(index, 1);
+        return removed ?? null;
       },
       async lockForUpdate(id) {
         calls.push(`lockForUpdate:${id}`);
@@ -145,7 +174,15 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
         const needle = params.q?.toLowerCase();
         return users
           .filter((u) => (params.role ? u.role === params.role : true))
-          .filter((u) => (needle ? u.name.toLowerCase().includes(needle) : true));
+          // Name OR email, matching the real repository. Searching only one of
+          // them here would green-light a test the database would fail.
+          .filter((u) =>
+            needle
+              ? u.name.toLowerCase().includes(needle) || u.email.toLowerCase().includes(needle)
+              : true,
+          )
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .slice(0, params.limit);
       },
       async findByEmail() {
         return null;
@@ -175,10 +212,31 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
           });
         }
       },
-      async findByEntity(entityType: AuditEntity, entityId, limit) {
-        return audit
-          .filter((a) => a.entityType === entityType && a.entityId === entityId)
-          .slice(0, limit);
+      /**
+       * Limits CHANGE SETS, not rows, and orders newest-first — the same
+       * contract the Prisma adapter implements with groupBy. Slicing rows here
+       * would hide the truncation bug this contract exists to prevent.
+       */
+      async findByEntity(entityType: AuditEntity, entityId, limit): Promise<AuditRowPage> {
+        const mine = audit.filter((a) => a.entityType === entityType && a.entityId === entityId);
+
+        const order: string[] = [];
+        for (const row of [...mine].sort(
+          (a, b) =>
+            b.changedAt.getTime() - a.changedAt.getTime() ||
+            (a.changeSetId < b.changeSetId ? 1 : a.changeSetId > b.changeSetId ? -1 : 0),
+        )) {
+          if (!order.includes(row.changeSetId)) order.push(row.changeSetId);
+        }
+
+        const kept = order.slice(0, limit);
+        const data = kept.flatMap((changeSetId) =>
+          mine
+            .filter((a) => a.changeSetId === changeSetId)
+            .sort((a, b) => a.field.localeCompare(b.field)),
+        );
+
+        return { data, hasMore: order.length > limit };
       },
     },
   };
@@ -197,16 +255,17 @@ export function createInMemoryUnitOfWork(): InMemoryUnitOfWork {
         createdAt: now,
         updatedAt: now,
         ...item,
-      } as Equipment);
+      });
     },
     seedUser(user) {
       users.push({
         email: `${user.id}@example.com`,
         role: 'operator',
         ...user,
-      } as UserSummary);
+      });
     },
     allRecords: () => [...records],
+    allEquipment: () => [...equipment],
     allAudit: () => [...audit],
     auditFor: (entityId) => audit.filter((a) => a.entityId === entityId),
     clearAudit: () => {

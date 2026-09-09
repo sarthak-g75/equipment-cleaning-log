@@ -18,9 +18,17 @@ where each SOLID principle actually shows up.
 Requires Docker Desktop (running) and nothing else.
 
 ```bash
-cp .env.example .env       # optional; the defaults in docker-compose.yml work as-is
+cp .env.example .env
+printf 'JWT_SECRET=%s
+' "$(openssl rand -base64 48)" >> .env
 docker compose up --build
 ```
+
+`JWT_SECRET` is required and has no default. The compose stack runs the API with
+`NODE_ENV=production`, and the API refuses to start with any of the secrets published in
+this repository — a validly-signed token's claims are trusted as-is, so a known signing
+key means anyone who has read the repo can mint a QA identity. Compose stops with a
+message naming the variable if it is unset.
 
 That brings up Postgres, applies migrations, seeds demo data, and serves both apps:
 
@@ -35,9 +43,13 @@ Sign in with one of the seeded users (password `password123` for all three):
 
 | Email | Role | Can do |
 |---|---|---|
-| `alice@example.com` | qa | everything, including verifying records |
-| `bob@example.com` | operator | log and edit records, but not verify them |
+| `alice@example.com` | qa | everything: manage equipment, log and edit records, verify records |
+| `bob@example.com` | operator | log and edit cleaning records; read equipment but not change it |
 | `carol@example.com` | operator | as above |
+
+Managing the asset register is QA-only because it decides what the whole plant may log
+against; the UI hides those controls for an operator rather than offering buttons that
+can only return a 403.
 
 To stop and discard the database volume: `docker compose down -v`.
 
@@ -87,11 +99,12 @@ npm run dev                      # http://localhost:5173
 ## Tests
 
 ```bash
-cd api && npm test               # 77 tests: unit + integration + e2e
-cd web && npm test               # 31 tests: components with a mocked network
+cd api && npm test               # 121 tests: unit + integration + e2e
+cd web && npm test               # 53 tests: components with a mocked network
 ```
 
-The API's unit tests (the audit diff and the cursor codec) need no database. The
+57 of the API's 121 tests need no database at all — the audit diff, the cursor codec, every
+business rule, and the whole HTTP stack mounted over in-memory repositories. The
 integration and e2e suites need `TEST_DATABASE_URL` (set in `api/.env.example`) — without
 it they **skip** and print a warning rather than failing silently, so check the output says
 they ran. The test database is created and migrated automatically on first run.
@@ -102,13 +115,17 @@ What the tests are actually for:
 |---|---|
 | `api/src/lib/audit/diff.test.ts` | Field-level diffing: date-identity, omitted vs. explicitly-null vs. unchanged, whitelist enforcement |
 | `api/src/modules/**/*.service.test.ts` | Every business rule, against in-memory fakes — no database, milliseconds |
-| `api/src/lib/pagination.test.ts` | Cursor round-trip, tamper rejection, `hasMore` probe logic |
+| `api/src/lib/pagination.test.ts` | Cursor round-trip, tamper rejection, cross-query cursor rejection, `hasMore` probe logic |
+| `api/tests/unit/http.test.ts` | The full HTTP stack — auth, roles, validation, attribution — over in-memory repositories, with no Postgres |
 | `api/tests/integration/pagination.test.ts` | Paging yields every row exactly once — including rows sharing a `cleanedAt` — and is unaffected by concurrent inserts |
-| `api/tests/integration/audit.test.ts` | Audit writes are correct, and a failed audit write rolls the record update back |
+| `api/tests/integration/audit.test.ts` | Audit writes are correct, a failed audit write rolls the record update back, and the cap never returns a partial change set |
+| `api/tests/integration/equipment.test.ts` | A PATCH never writes a field the caller omitted; deletion is audited; only QA may change the register |
+| `api/tests/integration/rate-limit.test.ts` | Repeated failed logins are locked out, and successful ones do not spend the budget |
 | `api/tests/e2e/api.test.ts` | Auth, authorisation, the full record lifecycle over HTTP, error envelopes |
 | `web/src/features/cleaning-records/**` | Audit drawer renders old → new and fetches lazily; the form maps server errors onto fields |
-| `web/src/components/Combobox.test.tsx` | The people picker filters, wraps, commits on Enter, and reverts on Escape — keyboard only |
-| `web/src/pages/EquipmentListPage.test.tsx` | Equipment create/edit/delete, duplicate-code and in-use conflicts surfaced in place |
+| `web/src/utils/format.test.ts` | `cleanedAt` survives an edit unchanged — the UTC field value and the ISO instant are exact inverses in any timezone |
+| `web/src/components/Combobox.test.tsx` | The people picker filters, wraps, commits on Enter, and reverts on Escape — keyboard only; and defers filtering to the server when asked |
+| `web/src/pages/EquipmentListPage.test.tsx` | Equipment create/edit/delete, duplicate-code and in-use conflicts surfaced in place, and the management controls hidden from an operator |
 
 Other checks:
 

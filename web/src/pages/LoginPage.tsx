@@ -5,12 +5,24 @@ import { Field, inputClass } from '../components/Field';
 import { useAuth } from '../features/auth/AuthContext';
 import { ApiError } from '../services/apiClient';
 
+/**
+ * The seeded demo credentials, in the dev bundle only.
+ *
+ * Prefilling working credentials — and printing the password on the sign-in
+ * screen — is a genuine convenience while demoing and a genuine problem in a
+ * deployed build. `import.meta.env.DEV` is statically replaced at build time, so
+ * a production bundle contains neither the values nor the hint.
+ */
+const DEMO = import.meta.env.DEV
+  ? { email: 'alice@example.com', password: 'password123' }
+  : { email: '', password: '' };
+
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [email, setEmail] = useState('alice@example.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState(DEMO.email);
+  const [password, setPassword] = useState(DEMO.password);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -23,7 +35,9 @@ export function LoginPage() {
     try {
       await login(email, password);
       // Return the user to wherever they were headed before the redirect.
-      navigate(from, { replace: true });
+      // `navigate` returns a promise in React Router 7; nothing here needs to
+      // wait on it, so the intent is marked rather than left floating.
+      void navigate(from, { replace: true });
     } catch (caught) {
       setError(
         caught instanceof ApiError ? caught.message : 'Could not sign in. Please try again.',
@@ -79,10 +93,12 @@ export function LoginPage() {
           {isSubmitting ? 'Signing in…' : 'Sign in'}
         </Button>
 
-        <p className="text-center text-xs text-slate-500">
-          Seeded users: <code>alice@example.com</code> (QA) or <code>bob@example.com</code>{' '}
-          (operator) — password <code>password123</code>.
-        </p>
+        {import.meta.env.DEV && (
+          <p className="text-center text-xs text-slate-500">
+            Seeded users: <code>alice@example.com</code> (QA) or <code>bob@example.com</code>{' '}
+            (operator) — password <code>password123</code>.
+          </p>
+        )}
       </form>
     </main>
   );

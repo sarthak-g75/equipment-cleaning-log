@@ -1,7 +1,7 @@
 export type Role = 'operator' | 'qa';
 export type EquipmentStatus = 'active' | 'retired';
 export type RecordStatus = 'pending' | 'verified';
-export type AuditAction = 'CREATE' | 'UPDATE';
+export type AuditAction = 'CREATE' | 'UPDATE' | 'DELETE';
 
 export interface AuthUser {
   id: string;
@@ -59,6 +59,22 @@ export interface AuditChangeSet {
   changedAt: string;
   actor: { id: string; name: string };
   changes: FieldChange[];
+}
+
+/**
+ * The audit history endpoint is capped rather than paginated, so it reports
+ * whether older change sets were withheld. Without that flag a truncated trail
+ * is indistinguishable from a complete one, which for an audit trail is the
+ * difference between "here is everything" and a complete-looking lie.
+ */
+export interface AuditHistoryMeta {
+  limit: number;
+  hasMore: boolean;
+}
+
+export interface AuditHistoryPage {
+  data: AuditChangeSet[];
+  meta: AuditHistoryMeta;
 }
 
 /** Mirrors the API's `meta` for a keyset page. There is deliberately no `total`. */

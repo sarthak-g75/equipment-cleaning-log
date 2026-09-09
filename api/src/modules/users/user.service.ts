@@ -7,6 +7,6 @@ export interface UserService {
 
 export function createUserService(uow: UnitOfWork): UserService {
   return {
-    list: (query) => uow.repos.users.list({ role: query.role, q: query.q }),
+    list: (query) => uow.repos.users.list({ role: query.role, q: query.q, limit: query.limit }),
   };
 }

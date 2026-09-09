@@ -3,6 +3,15 @@ import { pinoHttp } from 'pino-http';
 import { logger } from '../lib/logger';
 
 /**
+ * An inbound correlation id is attacker-controlled input that we are about to
+ * write into a response header and every log line for the request. Anything
+ * outside this shape is discarded in favour of a fresh id, so a caller cannot
+ * inject newlines into the log stream, smuggle a header, or bloat every log
+ * line with a megabyte of text.
+ */
+const SAFE_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
+
+/**
  * One log line per request, carrying a correlation id.
  *
  * The id is echoed back as `x-request-id`, which is what makes it possible to
@@ -13,7 +22,8 @@ export const requestLogger = pinoHttp({
   logger,
   genReqId: (req, res) => {
     const inbound = req.headers['x-request-id'];
-    const id = (Array.isArray(inbound) ? inbound[0] : inbound) ?? randomUUID();
+    const candidate = Array.isArray(inbound) ? inbound[0] : inbound;
+    const id = candidate && SAFE_REQUEST_ID.test(candidate) ? candidate : randomUUID();
     res.setHeader('x-request-id', id);
     return id;
   },

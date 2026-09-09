@@ -5,7 +5,14 @@ import { prisma } from '../../src/database/prisma';
 import { services } from '../../src/container';
 
 const { create: createRecord, update: updateRecord, verify: verifyRecord } = services.cleaningRecords;
-const { getRecordHistory } = services.audit;
+
+/**
+ * Unwraps the history envelope. The endpoint now returns `{ data, meta }` so a
+ * caller can tell a capped trail from a complete one; the truncation contract
+ * itself has dedicated tests further down.
+ */
+const getRecordHistory = async (recordId: string, query: { limit: number }) =>
+  (await services.audit.getRecordHistory(recordId, query)).data;
 import { hasDatabase, useCleanDatabase } from '../helpers/db';
 import { actorFor, makeEquipment, makeUser } from '../helpers/factories';
 
@@ -202,6 +209,69 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
       await expect(updateRecord(record.id, { method: 'SIP' }, actorFor(user))).rejects.toThrow(
         /verified/i,
       );
+    });
+  });
+  /**
+   * The bug these cover: `limit` was applied to ROWS, and the table stores one
+   * row per changed field. A creation writes six rows, so `?limit=3` returned
+   * one change set holding three of its six fields — with no flag saying the
+   * result was partial. An auditor read a complete-looking CREATE that was
+   * missing half of what happened. `limit` now counts change sets, and the
+   * repository never returns a fragment of one.
+   */
+  describe('capping the history', () => {
+    it('never returns a partial change set', async () => {
+      const page = await services.audit.getRecordHistory(record.id, { limit: 1 });
+
+      expect(page.data).toHaveLength(1);
+      // The whole creation, not the first three fields of it.
+      expect(page.data[0]!.action).toBe('CREATE');
+      expect([...page.data[0]!.changes].map((c) => c.field).sort()).toEqual([
+        'cleanedAt',
+        'cleanedById',
+        'equipmentId',
+        'method',
+        'notes',
+        'status',
+      ]);
+    });
+
+    it('counts change sets rather than rows', async () => {
+      await updateRecord(record.id, { method: 'SIP' }, actorFor(user));
+      await updateRecord(record.id, { notes: 'Re-swabbed' }, actorFor(user));
+
+      // Three events; the creation alone is six rows, so a row-based limit of
+      // three would have returned half of one event and called it done.
+      expect((await services.audit.getRecordHistory(record.id, { limit: 3 })).data).toHaveLength(3);
+      expect((await services.audit.getRecordHistory(record.id, { limit: 2 })).data).toHaveLength(2);
+    });
+
+    it('says so when older change sets were withheld', async () => {
+      await updateRecord(record.id, { method: 'SIP' }, actorFor(user));
+
+      const capped = await services.audit.getRecordHistory(record.id, { limit: 1 });
+      expect(capped.meta).toEqual({ limit: 1, hasMore: true });
+
+      const complete = await services.audit.getRecordHistory(record.id, { limit: 100 });
+      expect(complete.meta).toEqual({ limit: 100, hasMore: false });
+      expect(complete.data).toHaveLength(2);
+    });
+
+    it('returns the newest change sets first', async () => {
+      await updateRecord(record.id, { method: 'SIP' }, actorFor(user));
+
+      const page = await services.audit.getRecordHistory(record.id, { limit: 1 });
+
+      expect(page.data[0]!.action).toBe('UPDATE');
+      expect([...page.data[0]!.changes].map((c) => c.field)).toEqual(['method']);
+    });
+
+    it('reports an empty history without claiming there is more', async () => {
+      const fresh = await makeEquipment();
+      const page = await services.audit.getEquipmentHistory(fresh.id, { limit: 100 });
+
+      expect(page.data).toEqual([]);
+      expect(page.meta.hasMore).toBe(false);
     });
   });
 });

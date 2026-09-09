@@ -5,8 +5,9 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { apiClient } from '../../../services/apiClient';
+import { utcDateTimeLocalToIso } from '../../../utils/format';
 import type {
-  AuditChangeSet,
+  AuditHistoryPage,
   CleaningRecord,
   Envelope,
   Page,
@@ -50,11 +51,15 @@ export function useCleaningRecords(equipmentId: string, status?: RecordStatus) {
 export function useRecordAudit(recordId: string, enabled: boolean) {
   return useQuery({
     queryKey: recordKeys.audit(recordId),
-    queryFn: async () => {
-      const response = await apiClient.get<Envelope<AuditChangeSet[]>>(
+    queryFn: async ({ signal }) => {
+      // Returns `{ data, meta }`, not a bare array: `meta.hasMore` is how the
+      // UI can say "older changes are not shown" instead of implying the trail
+      // it rendered is the whole trail.
+      const response = await apiClient.get<AuditHistoryPage>(
         `/cleaning-records/${recordId}/audit`,
+        { signal },
       );
-      return response.data.data;
+      return response.data;
     },
     // Only fetched when the user actually opens the trail.
     enabled,
@@ -86,10 +91,10 @@ export function useCreateRecord(equipmentId: string) {
 export function useUpdateRecord(equipmentId: string) {
   const invalidate = useInvalidateRecords(equipmentId);
   return useMutation({
-    mutationFn: async ({ id, values }: { id: string; values: RecordFormValues }) => {
+    mutationFn: async ({ id, values }: { id: string; values: Partial<RecordFormValues> }) => {
       const response = await apiClient.patch<Envelope<CleaningRecord>>(
         `/cleaning-records/${id}`,
-        toPayload(values),
+        toPatchPayload(values),
       );
       return response.data.data;
     },
@@ -112,14 +117,39 @@ export function useVerifyRecord(equipmentId: string) {
 
 /**
  * The form holds `cleanedAt` as the value a datetime-local input produces
- * ("2026-08-24T08:00"), which carries no timezone. The API requires an offset,
- * so it is converted here — in the one place that knows about the wire format.
+ * ("2026-08-24T08:00"), which carries no timezone. The API requires an offset.
+ *
+ * `utcDateTimeLocalToIso` is the exact inverse of the `toUtcDateTimeLocal` that
+ * filled the field. Using `new Date(value)` here instead — as this did — reads
+ * the wall clock as LOCAL while the field was written as UTC, which shifted
+ * every saved timestamp by the browser's offset.
  */
 function toPayload(values: RecordFormValues) {
   return {
     cleanedById: values.cleanedById,
-    cleanedAt: new Date(values.cleanedAt).toISOString(),
+    cleanedAt: utcDateTimeLocalToIso(values.cleanedAt),
     method: values.method,
     notes: values.notes?.trim() ? values.notes.trim() : null,
   };
+}
+
+/**
+ * A genuine PATCH: only the keys present in `values` reach the wire.
+ *
+ * The API distinguishes "omitted" from "explicitly null" — omitting `notes` is
+ * not a change to `notes`, while sending `null` clears it — and the audit trail
+ * depends on that distinction. Sending the whole form on every save collapsed
+ * it, so an edit re-submitted every field whether or not the user touched it.
+ */
+function toPatchPayload(values: Partial<RecordFormValues>) {
+  const payload: Record<string, unknown> = {};
+
+  if (values.cleanedById !== undefined) payload.cleanedById = values.cleanedById;
+  if (values.cleanedAt !== undefined) payload.cleanedAt = utcDateTimeLocalToIso(values.cleanedAt);
+  if (values.method !== undefined) payload.method = values.method;
+  // An emptied notes box is an explicit null — "the user cleared this" is a
+  // real, auditable act, distinct from never having touched the field.
+  if (values.notes !== undefined) payload.notes = values.notes.trim() ? values.notes.trim() : null;
+
+  return payload;
 }

@@ -169,4 +169,62 @@ describe('Combobox', () => {
     expect(selected).toHaveLength(1);
     expect(within(selected[0]!).getByText('Bob Novak')).toBeInTheDocument();
   });
+  /**
+   * With `onSearchChange` the options are already filtered by the server, so
+   * filtering again locally would hide rows the server matched on a field this
+   * component cannot see — and, more importantly, the query has to actually
+   * reach the parent. The people picker used to fetch the whole (capped)
+   * directory once and filter it in the browser, which made anyone outside the
+   * first page unreachable.
+   */
+  describe('server-filtered mode', () => {
+    it('reports the query upward instead of filtering locally', async () => {
+      const user = userEvent.setup();
+      const onSearchChange = vi.fn();
+
+      render(
+        <Combobox
+          id="picker"
+          options={OPTIONS}
+          value={null}
+          onChange={vi.fn()}
+          onSearchChange={onSearchChange}
+        />,
+      );
+
+      const input = screen.getByRole('combobox');
+      await user.click(input);
+      await user.type(input, 'zzz');
+
+      // The parent heard the query...
+      expect(onSearchChange).toHaveBeenCalledWith('zzz');
+      // ...and the list still shows what the server sent, rather than being
+      // filtered down to nothing behind the parent's back.
+      expect(screen.getAllByRole('option')).toHaveLength(OPTIONS.length);
+    });
+
+    it('clears the reported query when the list closes', async () => {
+      const user = userEvent.setup();
+      const onSearchChange = vi.fn();
+
+      render(
+        <Combobox
+          id="picker"
+          options={OPTIONS}
+          value={null}
+          onChange={vi.fn()}
+          onSearchChange={onSearchChange}
+        />,
+      );
+
+      const input = screen.getByRole('combobox');
+      await user.click(input);
+      await user.type(input, 'ali');
+      onSearchChange.mockClear();
+
+      await user.keyboard('{Escape}');
+
+      expect(onSearchChange).toHaveBeenCalledWith('');
+    });
+  });
 });

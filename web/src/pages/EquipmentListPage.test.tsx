@@ -4,7 +4,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { server } from '../tests/server';
 import { API } from '../tests/handlers';
-import { renderWithProviders } from '../tests/renderWithProviders';
+import { OPERATOR_USER, QA_USER, renderWithProviders } from '../tests/renderWithProviders';
 import { EquipmentListPage } from './EquipmentListPage';
 
 const equipment = [
@@ -28,7 +28,12 @@ const equipment = [
 
 const listHandler = () => http.get(`${API}/equipment`, () => HttpResponse.json({ data: equipment }));
 
-const renderPage = () => renderWithProviders(<EquipmentListPage />, { route: '/equipment' });
+/**
+ * Rendered as QA by default: managing the asset register is a QA action on the
+ * server, so the buttons only exist for that role.
+ */
+const renderPage = (user = QA_USER) =>
+  renderWithProviders(<EquipmentListPage />, { route: '/equipment', user });
 
 describe('EquipmentListPage', () => {
   it('lists equipment and marks retired items', async () => {
@@ -213,5 +218,30 @@ describe('EquipmentListPage', () => {
       expect(screen.queryByRole('link', { name: 'Bioreactor 101' })).not.toBeInTheDocument(),
     );
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+  /**
+   * The API refuses equipment writes from an operator with a 403, so offering
+   * the buttons would only ever produce a failed request.
+   */
+  it('hides the management controls from an operator', async () => {
+    server.use(listHandler());
+    renderPage(OPERATOR_USER);
+
+    expect(await screen.findByRole('link', { name: 'Bioreactor 101' })).toBeInTheDocument();
+
+    expect(screen.queryByRole('button', { name: 'Add equipment' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
+    // The status filter is a read control and stays available.
+    expect(screen.getByRole('button', { name: 'Retired' })).toBeInTheDocument();
+  });
+
+  it('offers an operator no call to action on an empty register', async () => {
+    server.use(http.get(`${API}/equipment`, () => HttpResponse.json({ data: [] })));
+    renderPage(OPERATOR_USER);
+
+    expect(await screen.findByText('No equipment yet')).toBeInTheDocument();
+    expect(screen.getByText('Ask a QA user to add equipment.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add equipment' })).not.toBeInTheDocument();
   });
 });

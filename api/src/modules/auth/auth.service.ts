@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { UnauthorizedError } from '../../lib/errors';
-import { signAccessToken, type AuthenticatedUser } from '../../middleware/auth';
+import { signAccessToken, type AuthenticatedUser } from '../../lib/tokens';
 import type { UnitOfWork } from '../../shared/ports';
 import type { LoginInput } from './auth.validation';
 

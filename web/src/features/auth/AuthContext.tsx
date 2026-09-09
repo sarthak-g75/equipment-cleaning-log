@@ -13,8 +13,21 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+interface AuthProviderProps {
+  children: ReactNode;
+  /**
+   * Seeds the provider with an already-known identity.
+   *
+   * This is the seam a session-restore flow would use — hydrating from
+   * `GET /auth/me` on boot once there is a refresh cookie to authenticate it —
+   * and it is what lets a test render a page as a specific role without driving
+   * the login form first.
+   */
+  initialUser?: AuthUser | null;
+}
+
+export function AuthProvider({ children, initialUser = null }: AuthProviderProps) {
+  const [user, setUser] = useState<AuthUser | null>(initialUser);
   const queryClient = useQueryClient();
 
   const logout = useCallback(() => {
