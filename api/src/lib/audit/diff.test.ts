@@ -85,7 +85,7 @@ describe('diffFields', () => {
   it('reports nothing for an unchanged null', () => {
     const before = { ...base(), notes: null };
 
-    expect(diffFields(before, { notes: null }, TRACKED)).toEqual([]);
+    expect(diffFields<Record>(before, { notes: null }, TRACKED)).toEqual([]);
   });
 
   it('reports one entry per changed field and none for the unchanged ones', () => {

@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cleaning}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cleaning}
+      POSTGRES_DB: ${POSTGRES_DB:-cleaning_log}
+    ports:
+      - '${POSTGRES_PORT:-5433}:5432'
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # The api service waits on this, so it never races the first migration
+      # against a Postgres that has accepted a TCP connection but is not yet
+      # ready to serve queries.
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-cleaning} -d ${POSTGRES_DB:-cleaning_log}']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./api
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cleaning}:${POSTGRES_PASSWORD:-cleaning}@db:5432/${POSTGRES_DB:-cleaning_log}?schema=public
+      JWT_SECRET: ${JWT_SECRET:-dev-only-secret-change-me}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
+      CORS_ORIGIN: http://localhost:${WEB_PORT:-5173}
+    ports:
+      - '${API_PORT:-4000}:4000'
+    depends_on:
+      db:
+        condition: service_healthy
+    # Migrate and seed on start so `docker compose up` is genuinely one command.
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed && node dist/server.js"
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_URL: http://localhost:${API_PORT:-4000}/api/v1
+    ports:
+      - '${WEB_PORT:-5173}:80'
+    depends_on:
+      - api
+
+volumes:
+  db-data:
