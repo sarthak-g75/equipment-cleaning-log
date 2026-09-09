@@ -10,6 +10,11 @@ const USERS = [
   { email: 'alice@example.com', name: 'Alice Chen', role: 'qa' as const, password: 'password123' },
   { email: 'bob@example.com', name: 'Bob Novak', role: 'operator' as const, password: 'password123' },
   { email: 'carol@example.com', name: 'Carol Diaz', role: 'operator' as const, password: 'password123' },
+  { email: 'david@example.com', name: 'David Osei', role: 'operator' as const, password: 'password123' },
+  { email: 'erin@example.com', name: 'Erin Fischer', role: 'operator' as const, password: 'password123' },
+  { email: 'farah@example.com', name: 'Farah Haddad', role: 'qa' as const, password: 'password123' },
+  { email: 'george@example.com', name: 'George Miller', role: 'operator' as const, password: 'password123' },
+  { email: 'hana@example.com', name: 'Hana Suzuki', role: 'operator' as const, password: 'password123' },
 ];
 
 const EQUIPMENT = [
@@ -22,7 +27,6 @@ const EQUIPMENT = [
 ];
 
 const METHODS = ['CIP - caustic', 'CIP - acid rinse', 'Manual wipe (IPA 70%)', 'SIP', 'COP soak'];
-const OPERATORS = ['B. Novak', 'C. Diaz', 'D. Osei', 'E. Fischer'];
 
 async function main(): Promise<void> {
   // Idempotent: a re-run should refresh the dataset, not append a second copy.
@@ -39,6 +43,9 @@ async function main(): Promise<void> {
     ),
   );
   const qaUser = users.find((u) => u.role === 'qa')!;
+  // Anyone can perform a cleaning, including QA staff — the relation is to the
+  // person who did the work, not to a role.
+  const cleaners = users;
 
   const equipment = await Promise.all(
     EQUIPMENT.map((item) => prisma.equipment.create({ data: item })),
@@ -62,7 +69,7 @@ async function main(): Promise<void> {
 
         records.push({
           equipmentId: item.id,
-          cleanedBy: OPERATORS[index % OPERATORS.length]!,
+          cleanedById: cleaners[index % cleaners.length]!.id,
           cleanedAt,
           method: METHODS[index % METHODS.length]!,
           notes: index % 3 === 0 ? null : `Swab test passed, TOC ${(index % 9) / 10 + 0.2} ppm`,
@@ -93,7 +100,7 @@ async function main(): Promise<void> {
     };
     auditRows.push(
       { ...common, field: 'equipmentId', oldValue: null, newValue: record.equipmentId },
-      { ...common, field: 'cleanedBy', oldValue: null, newValue: record.cleanedBy },
+      { ...common, field: 'cleanedById', oldValue: null, newValue: record.cleanedById },
       { ...common, field: 'cleanedAt', oldValue: null, newValue: record.cleanedAt.toISOString() },
       { ...common, field: 'method', oldValue: null, newValue: record.method },
       { ...common, field: 'status', oldValue: null, newValue: record.status },

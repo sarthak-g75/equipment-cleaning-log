@@ -1,19 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { Equipment } from '@prisma/client';
+import type { Equipment, User } from '@prisma/client';
 import { prisma } from '../../src/database/prisma';
 import { listRecords } from '../../src/modules/cleaning-records/cleaning-record.service';
 import { hasDatabase, useCleanDatabase } from '../helpers/db';
-import { makeEquipment, makeRecords } from '../helpers/factories';
+import { makeEquipment, makeRecords, makeUser } from '../helpers/factories';
 
 describe.skipIf(!hasDatabase)('keyset pagination (integration)', () => {
   useCleanDatabase();
 
   let equipment: Equipment;
+  let cleaner: User;
 
   const BASE = Date.UTC(2026, 7, 24, 8, 0, 0);
 
   beforeEach(async () => {
     equipment = await makeEquipment();
+    cleaner = await makeUser();
 
     // 25 records. Five of them share one identical `cleanedAt`, which is the
     // realistic case (a shift changeover logs several cleanings at once) and the
@@ -23,7 +25,7 @@ describe.skipIf(!hasDatabase)('keyset pagination (integration)', () => {
       status: (i % 3 === 0 ? 'verified' : 'pending') as 'verified' | 'pending',
       method: `Method ${i}`,
     }));
-    await makeRecords(equipment.id, rows);
+    await makeRecords(equipment.id, cleaner.id, rows);
   });
 
   /** Walks every page via nextCursor and returns the ids in the order seen. */
@@ -93,7 +95,7 @@ describe.skipIf(!hasDatabase)('keyset pagination (integration)', () => {
     // insert shifts every subsequent row and the reader sees a duplicate.
     const first = await listRecords(equipment.id, { limit: 10 });
 
-    await makeRecords(equipment.id, [{ cleanedAt: new Date(BASE + 10_000_000) }]);
+    await makeRecords(equipment.id, cleaner.id, [{ cleanedAt: new Date(BASE + 10_000_000) }]);
 
     const second = await listRecords(equipment.id, {
       limit: 10,
@@ -131,7 +133,7 @@ describe.skipIf(!hasDatabase)('keyset pagination (integration)', () => {
 
   it('scopes results to the requested equipment', async () => {
     const other = await makeEquipment();
-    await makeRecords(other.id, [{ cleanedAt: new Date(BASE) }]);
+    await makeRecords(other.id, cleaner.id, [{ cleanedAt: new Date(BASE) }]);
 
     const page = await listRecords(equipment.id, { limit: 100 });
 

@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { authRouter } from '../modules/auth/auth.routes';
 import { equipmentRouter } from '../modules/equipment/equipment.routes';
 import { cleaningRecordRouter } from '../modules/cleaning-records/cleaning-record.routes';
+import { userRouter } from '../modules/users/user.routes';
 
 export const apiRouter = Router();
 
@@ -12,5 +13,6 @@ apiRouter.use('/auth', authRouter);
 // than per-route means a newly added route is protected by default; forgetting
 // to opt in is the failure mode that leaks data.
 apiRouter.use(requireAuth);
+apiRouter.use('/users', userRouter);
 apiRouter.use('/equipment', equipmentRouter);
 apiRouter.use('/cleaning-records', cleaningRecordRouter);

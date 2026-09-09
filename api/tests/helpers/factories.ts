@@ -48,12 +48,13 @@ export function makeEquipment(overrides: Partial<Equipment> = {}): Promise<Equip
  */
 export function makeRecords(
   equipmentId: string,
+  cleanedById: string,
   rows: ReadonlyArray<Partial<CleaningRecord> & { cleanedAt: Date }>,
 ): Promise<{ count: number }> {
   return prisma.cleaningRecord.createMany({
     data: rows.map((row) => ({
       equipmentId,
-      cleanedBy: row.cleanedBy ?? 'B. Novak',
+      cleanedById: row.cleanedById ?? cleanedById,
       cleanedAt: row.cleanedAt,
       method: row.method ?? 'CIP - caustic',
       notes: row.notes ?? null,

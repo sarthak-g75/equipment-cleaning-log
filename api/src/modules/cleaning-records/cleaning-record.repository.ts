@@ -1,5 +1,6 @@
-import type { CleaningRecord, Prisma, RecordStatus } from '@prisma/client';
+import type { Prisma, RecordStatus } from '@prisma/client';
 import { prisma } from '../../database/prisma';
+import { recordInclude, type CleaningRecordDto } from './cleaning-record.types';
 import {
   KEYSET_ORDER_BY,
   decodeCursor,
@@ -17,7 +18,7 @@ export interface ListRecordsParams {
 
 export async function listByEquipment(
   params: ListRecordsParams,
-): Promise<{ data: CleaningRecord[]; meta: PageMeta }> {
+): Promise<{ data: CleaningRecordDto[]; meta: PageMeta }> {
   const cursor = params.cursor ? decodeCursor(params.cursor) : undefined;
 
   const where: Prisma.CleaningRecordWhereInput = {
@@ -35,6 +36,7 @@ export async function listByEquipment(
     // Must stay in lockstep with the cursor comparison in keysetWhere().
     orderBy: [...KEYSET_ORDER_BY],
     take: params.limit + 1,
+    include: recordInclude,
   });
 
   return toPage(rows, params.limit);

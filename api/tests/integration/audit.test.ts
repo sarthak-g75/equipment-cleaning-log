@@ -7,6 +7,7 @@ import {
   updateRecord,
   verifyRecord,
 } from '../../src/modules/cleaning-records/cleaning-record.service';
+import { getRecordHistory } from '../../src/modules/audit/audit.service';
 import { hasDatabase, useCleanDatabase } from '../helpers/db';
 import { actorFor, makeEquipment, makeUser } from '../helpers/factories';
 
@@ -15,6 +16,7 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
 
   let equipment: Equipment;
   let user: User;
+  let cleaner: User;
   let record: CleaningRecord;
 
   const CLEANED_AT = new Date('2026-08-24T08:00:00.000Z');
@@ -22,10 +24,11 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
   beforeEach(async () => {
     equipment = await makeEquipment();
     user = await makeUser({ name: 'Alice Chen', role: 'qa' });
+    cleaner = await makeUser({ name: 'Bob Novak', role: 'operator' });
     record = await createRecord(
       equipment.id,
       {
-        cleanedBy: 'B. Novak',
+        cleanedById: cleaner.id,
         cleanedAt: CLEANED_AT,
         method: 'CIP - caustic',
         notes: 'Swab passed',
@@ -43,7 +46,7 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
 
       expect(rows.map((r) => r.field)).toEqual([
         'cleanedAt',
-        'cleanedBy',
+        'cleanedById',
         'equipmentId',
         'method',
         'notes',
@@ -90,7 +93,7 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
 
       await updateRecord(
         record.id,
-        { method: 'CIP - caustic', cleanedBy: 'B. Novak' },
+        { method: 'CIP - caustic', cleanedById: cleaner.id },
         actorFor(user),
       );
 
@@ -120,6 +123,48 @@ describe.skipIf(!hasDatabase)('audit trail (integration)', () => {
       const rows = await auditRows(record.id);
 
       expect(rows.map((r) => r.field)).not.toContain('updatedAt');
+    });
+  });
+
+  describe('reference fields', () => {
+    it('stores the raw id but resolves it to a name for display', async () => {
+      const replacement = await makeUser({ name: 'Hana Suzuki', role: 'operator' });
+
+      await updateRecord(record.id, { cleanedById: replacement.id }, actorFor(user));
+
+      const [latest] = await getRecordHistory(record.id, { limit: 100 });
+      const change = latest!.changes.find((c) => c.field === 'cleanedById')!;
+
+      // The stored value stays the id — that is what actually changed — while
+      // the label exists purely so an auditor is not reading raw UUIDs.
+      expect(change.oldValue).toBe(cleaner.id);
+      expect(change.newValue).toBe(replacement.id);
+      expect(change.oldLabel).toBe('Bob Novak');
+      expect(change.newLabel).toBe('Hana Suzuki');
+    });
+
+    it('leaves non-reference fields unlabelled', async () => {
+      await updateRecord(record.id, { method: 'SIP' }, actorFor(user));
+
+      const [latest] = await getRecordHistory(record.id, { limit: 100 });
+      const change = latest!.changes.find((c) => c.field === 'method')!;
+
+      expect(change).not.toHaveProperty('oldLabel');
+      expect(change.newValue).toBe('SIP');
+    });
+
+    it('falls back to the raw id when the referenced row no longer resolves', async () => {
+      // Simulates a reference whose target has since gone: the trail must still
+      // render something truthful rather than a blank.
+      await prisma.auditEntry.updateMany({
+        where: { entityId: record.id, field: 'cleanedById' },
+        data: { newValue: '00000000-0000-4000-8000-000000000000' },
+      });
+
+      const sets = await getRecordHistory(record.id, { limit: 100 });
+      const change = sets.flatMap((s) => s.changes).find((c) => c.field === 'cleanedById')!;
+
+      expect(change.newLabel).toBe('00000000-0000-4000-8000-000000000000');
     });
   });
 

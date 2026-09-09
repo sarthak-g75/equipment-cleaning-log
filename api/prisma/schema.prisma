@@ -53,7 +53,8 @@ model User {
   passwordHash String
   createdAt    DateTime @default(now()) @db.Timestamptz(3)
 
-  auditEntries AuditEntry[]
+  auditEntries    AuditEntry[]
+  cleaningRecords CleaningRecord[] @relation("CleanedBy")
 }
 
 model Equipment {
@@ -70,10 +71,12 @@ model Equipment {
 model CleaningRecord {
   id          String       @id @default(uuid()) @db.Uuid
   equipmentId String       @db.Uuid
-  // The operator who physically performed the cleaning. Deliberately a plain
-  // string and NOT a User FK: the person cleaning a vessel on the shop floor
-  // often has no login. The audit "who" is a separate, authenticated actor.
-  cleanedBy   String
+  // The user who physically performed the cleaning. This is a real relation, not
+  // a free-text name: it makes "show me everything this operator cleaned" a
+  // query rather than a string match, and it cannot drift when someone is
+  // renamed. It stays distinct from the audit actor, which is whoever was
+  // authenticated when the record was written or changed.
+  cleanedById String       @db.Uuid
   cleanedAt   DateTime     @db.Timestamptz(3)
   method      String
   notes       String?
@@ -82,11 +85,13 @@ model CleaningRecord {
   updatedAt   DateTime     @updatedAt @db.Timestamptz(3)
 
   equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Restrict)
+  cleanedBy User      @relation("CleanedBy", fields: [cleanedById], references: [id], onDelete: Restrict)
 
   // Two indexes, not one. Postgres can only use a leading prefix of a composite
   // index, so [equipmentId, status, ...] cannot serve the unfiltered list query.
   @@index([equipmentId, cleanedAt(sort: Desc), id(sort: Desc)])
   @@index([equipmentId, status, cleanedAt(sort: Desc), id(sort: Desc)])
+  @@index([cleanedById])
 }
 
 model AuditEntry {

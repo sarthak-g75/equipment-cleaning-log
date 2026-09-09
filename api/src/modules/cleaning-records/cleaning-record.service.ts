@@ -1,4 +1,5 @@
 import type { CleaningRecord } from '@prisma/client';
+import { recordInclude, type CleaningRecordDto } from './cleaning-record.types';
 import { prisma } from '../../database/prisma';
 import { ConflictError, NotFoundError } from '../../lib/errors';
 import { diffFields, recordChanges, type Actor } from '../../lib/audit';
@@ -12,7 +13,7 @@ import type {
 
 export const CLEANING_RECORD_TRACKED_FIELDS = [
   'equipmentId',
-  'cleanedBy',
+  'cleanedById',
   'cleanedAt',
   'method',
   'notes',
@@ -22,7 +23,7 @@ export const CLEANING_RECORD_TRACKED_FIELDS = [
 export async function listRecords(
   equipmentId: string,
   query: ListRecordsQuery,
-): Promise<{ data: CleaningRecord[]; meta: PageMeta }> {
+): Promise<{ data: CleaningRecordDto[]; meta: PageMeta }> {
   // Fail with a 404 for an unknown equipment rather than returning an empty
   // page, which would be indistinguishable from "this equipment is clean".
   const exists = await prisma.equipment.findUnique({
@@ -39,8 +40,8 @@ export async function listRecords(
   });
 }
 
-export async function getRecord(id: string): Promise<CleaningRecord> {
-  const record = await prisma.cleaningRecord.findUnique({ where: { id } });
+export async function getRecord(id: string): Promise<CleaningRecordDto> {
+  const record = await prisma.cleaningRecord.findUnique({ where: { id }, include: recordInclude });
   if (!record) throw new NotFoundError('CleaningRecord', id);
   return record;
 }
@@ -49,7 +50,7 @@ export function createRecord(
   equipmentId: string,
   input: CreateRecordInput,
   actor: Actor,
-): Promise<CleaningRecord> {
+): Promise<CleaningRecordDto> {
   return prisma.$transaction(async (tx) => {
     const equipment = await tx.equipment.findUnique({ where: { id: equipmentId } });
     if (!equipment) throw new NotFoundError('Equipment', equipmentId);
@@ -63,6 +64,7 @@ export function createRecord(
 
     const created = await tx.cleaningRecord.create({
       data: { ...input, equipmentId },
+      include: recordInclude,
     });
 
     await recordChanges(tx, {
@@ -81,7 +83,7 @@ export function updateRecord(
   id: string,
   patch: UpdateRecordInput,
   actor: Actor,
-): Promise<CleaningRecord> {
+): Promise<CleaningRecordDto> {
   return prisma.$transaction(async (tx) => {
     // Lock the row before reading it. Postgres defaults to READ COMMITTED, so
     // without this two concurrent PATCHes both read the same `before` and the
@@ -101,7 +103,11 @@ export function updateRecord(
       );
     }
 
-    const after = await tx.cleaningRecord.update({ where: { id }, data: patch });
+    const after = await tx.cleaningRecord.update({
+      where: { id },
+      data: patch,
+      include: recordInclude,
+    });
 
     // Diffed against the row Prisma returned, not against the client's patch, so
     // anything the service computes server-side is audited automatically and a
@@ -118,7 +124,7 @@ export function updateRecord(
   });
 }
 
-export function verifyRecord(id: string, actor: Actor): Promise<CleaningRecord> {
+export function verifyRecord(id: string, actor: Actor): Promise<CleaningRecordDto> {
   return prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "CleaningRecord" WHERE id = ${id}::uuid FOR UPDATE`;
 
@@ -132,6 +138,7 @@ export function verifyRecord(id: string, actor: Actor): Promise<CleaningRecord> 
     const after = await tx.cleaningRecord.update({
       where: { id },
       data: { status: 'verified' },
+      include: recordInclude,
     });
 
     await recordChanges(tx, {

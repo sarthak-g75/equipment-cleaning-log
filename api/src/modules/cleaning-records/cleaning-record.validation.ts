@@ -27,7 +27,7 @@ const notesSchema = z
   .optional();
 
 export const createRecordBodySchema = z.object({
-  cleanedBy: z.string().trim().min(1).max(120),
+  cleanedById: z.uuid('Select who performed the cleaning'),
   cleanedAt: z.iso.datetime({ offset: true }).transform((value) => new Date(value)),
   method: z.string().trim().min(1).max(120),
   notes: notesSchema,
@@ -41,7 +41,7 @@ export const createRecordBodySchema = z.object({
  */
 export const updateRecordBodySchema = z
   .object({
-    cleanedBy: z.string().trim().min(1).max(120).optional(),
+    cleanedById: z.uuid('Select who performed the cleaning').optional(),
     cleanedAt: z.iso
       .datetime({ offset: true })
       .transform((value) => new Date(value))

@@ -17,12 +17,8 @@ describe.skipIf(!hasDatabase)('API (e2e)', () => {
   let qaToken: string;
   let operatorToken: string;
 
-  const newRecord = {
-    cleanedBy: 'B. Novak',
-    cleanedAt: '2026-08-24T08:00:00.000Z',
-    method: 'CIP - caustic',
-    notes: 'Swab passed',
-  };
+  /** Built in beforeEach because cleanedById must reference a real seeded user. */
+  let newRecord: Record<string, unknown>;
 
   beforeEach(async () => {
     qa = await makeUser({ name: 'Alice Chen', role: 'qa' });
@@ -30,6 +26,12 @@ describe.skipIf(!hasDatabase)('API (e2e)', () => {
     equipment = await makeEquipment();
     qaToken = tokenFor(qa);
     operatorToken = tokenFor(operator);
+    newRecord = {
+      cleanedById: operator.id,
+      cleanedAt: '2026-08-24T08:00:00.000Z',
+      method: 'CIP - caustic',
+      notes: 'Swab passed',
+    };
   });
 
   const createRecord = () =>
@@ -203,6 +205,83 @@ describe.skipIf(!hasDatabase)('API (e2e)', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('users (the cleaned-by picker source)', () => {
+    it('lists users without ever exposing a password hash', async () => {
+      const res = await request(app)
+        .get('/api/v1/users')
+        .set('Authorization', `Bearer ${operatorToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.length).toBeGreaterThanOrEqual(2);
+      for (const user of res.body.data) {
+        expect(user).not.toHaveProperty('passwordHash');
+        expect(user).toMatchObject({ id: expect.any(String), name: expect.any(String) });
+      }
+    });
+
+    it('filters by a case-insensitive search across name and email', async () => {
+      const byName = await request(app)
+        .get('/api/v1/users?q=alice')
+        .set('Authorization', `Bearer ${operatorToken}`);
+      expect(byName.body.data.map((u: { name: string }) => u.name)).toEqual(['Alice Chen']);
+
+      const byEmail = await request(app)
+        .get(`/api/v1/users?q=${operator.email.split('@')[0]}`)
+        .set('Authorization', `Bearer ${operatorToken}`);
+      expect(byEmail.body.data.map((u: { id: string }) => u.id)).toEqual([operator.id]);
+    });
+
+    it('filters by role', async () => {
+      const res = await request(app)
+        .get('/api/v1/users?role=qa')
+        .set('Authorization', `Bearer ${operatorToken}`);
+
+      expect(res.body.data.every((u: { role: string }) => u.role === 'qa')).toBe(true);
+    });
+
+    it('requires authentication', async () => {
+      await request(app).get('/api/v1/users').expect(401);
+    });
+  });
+
+  describe('cleaning records expose the cleaner as a relation', () => {
+    it('embeds the cleaning user on create and on list', async () => {
+      const created = await createRecord();
+
+      expect(created.body.data.cleanedBy).toMatchObject({
+        id: operator.id,
+        name: 'Bob Novak',
+      });
+      expect(created.body.data.cleanedBy).not.toHaveProperty('passwordHash');
+
+      const list = await request(app)
+        .get(`/api/v1/equipment/${equipment.id}/cleaning-records`)
+        .set('Authorization', `Bearer ${operatorToken}`);
+
+      expect(list.body.data[0].cleanedBy.name).toBe('Bob Novak');
+    });
+
+    it('rejects a cleanedById that is not a real user', async () => {
+      const res = await request(app)
+        .post(`/api/v1/equipment/${equipment.id}/cleaning-records`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ ...newRecord, cleanedById: randomUUID() });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('FOREIGN_KEY_VIOLATION');
+    });
+
+    it('rejects a cleanedById that is not a uuid with a field-level error', async () => {
+      const res = await request(app)
+        .post(`/api/v1/equipment/${equipment.id}/cleaning-records`)
+        .set('Authorization', `Bearer ${operatorToken}`)
+        .send({ ...newRecord, cleanedById: 'B. Novak' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.details[0].field).toBe('body.cleanedById');
     });
   });
 
