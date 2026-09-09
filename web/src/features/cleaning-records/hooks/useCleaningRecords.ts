@@ -117,7 +117,7 @@ export function useVerifyRecord(equipmentId: string) {
  */
 function toPayload(values: RecordFormValues) {
   return {
-    cleanedBy: values.cleanedBy,
+    cleanedById: values.cleanedById,
     cleanedAt: new Date(values.cleanedAt).toISOString(),
     method: values.method,
     notes: values.notes?.trim() ? values.notes.trim() : null,

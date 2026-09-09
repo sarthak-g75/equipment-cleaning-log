@@ -89,7 +89,10 @@ function RecordRow({
         <td className="px-3 py-2.5 whitespace-nowrap tabular-nums text-slate-700">
           {formatTimestamp(record.cleanedAt)}
         </td>
-        <td className="px-3 py-2.5 text-slate-700">{record.cleanedBy}</td>
+        <td className="px-3 py-2.5 text-slate-700">
+          <span className="block">{record.cleanedBy.name}</span>
+          <span className="block text-xs text-slate-400">{record.cleanedBy.email}</span>
+        </td>
         <td className="px-3 py-2.5 text-slate-700">{record.method}</td>
         <td className="max-w-[16rem] px-3 py-2.5 text-slate-500">
           {record.notes ?? <span className="text-slate-400">—</span>}

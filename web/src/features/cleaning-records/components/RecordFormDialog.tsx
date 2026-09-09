@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useEffect, useMemo } from 'react';
+import { Controller, useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Dialog } from '../../../components/Dialog';
 import { Button } from '../../../components/Button';
 import { Field, inputClass } from '../../../components/Field';
+import { Combobox, type ComboboxOption } from '../../../components/Combobox';
+import { useUsers } from '../../users/hooks/useUsers';
 import { ApiError } from '../../../services/apiClient';
 import { toDateTimeLocal } from '../../../utils/format';
 import { recordSchema, type RecordFormValues } from '../validators/recordSchema';
@@ -15,11 +17,12 @@ interface RecordFormDialogProps {
   onSubmit: (values: RecordFormValues) => Promise<unknown>;
   /** Present when editing; absent when creating. */
   record?: CleaningRecord | undefined;
-  defaultCleanedBy: string;
+  /** The signed-in user, pre-selected as the likeliest cleaner. */
+  defaultCleanedById: string;
 }
 
-const emptyValues = (cleanedBy: string): RecordFormValues => ({
-  cleanedBy,
+const emptyValues = (cleanedById: string): RecordFormValues => ({
+  cleanedById,
   cleanedAt: toDateTimeLocal(new Date().toISOString()),
   method: '',
   notes: '',
@@ -30,19 +33,26 @@ export function RecordFormDialog({
   onClose,
   onSubmit,
   record,
-  defaultCleanedBy,
+  defaultCleanedById,
 }: RecordFormDialogProps) {
   const isEditing = record !== undefined;
+  const users = useUsers();
+
+  const userOptions = useMemo<ComboboxOption[]>(
+    () => (users.data ?? []).map((u) => ({ value: u.id, label: u.name, hint: u.email })),
+    [users.data],
+  );
 
   const {
     register,
+    control,
     handleSubmit,
     reset,
     setError,
     formState: { errors, isSubmitting },
   } = useForm<RecordFormValues>({
     resolver: zodResolver(recordSchema),
-    defaultValues: emptyValues(defaultCleanedBy),
+    defaultValues: emptyValues(defaultCleanedById),
   });
 
   // Re-seed the form whenever the dialog opens for a different record. Without
@@ -52,14 +62,14 @@ export function RecordFormDialog({
     reset(
       record
         ? {
-            cleanedBy: record.cleanedBy,
+            cleanedById: record.cleanedById,
             cleanedAt: toDateTimeLocal(record.cleanedAt),
             method: record.method,
             notes: record.notes ?? '',
           }
-        : emptyValues(defaultCleanedBy),
+        : emptyValues(defaultCleanedById),
     );
-  }, [isOpen, record, defaultCleanedBy, reset]);
+  }, [isOpen, record, defaultCleanedById, reset]);
 
   const submit = handleSubmit(async (values) => {
     try {
@@ -75,7 +85,7 @@ export function RecordFormDialog({
       // a rule only the server knows about still lands next to the right field
       // rather than in a generic banner.
       const fieldErrors = error.fieldErrors();
-      const known: (keyof RecordFormValues)[] = ['cleanedBy', 'cleanedAt', 'method', 'notes'];
+      const known: (keyof RecordFormValues)[] = ['cleanedById', 'cleanedAt', 'method', 'notes'];
       let matched = false;
 
       for (const field of known) {
@@ -97,13 +107,31 @@ export function RecordFormDialog({
       title={isEditing ? 'Edit cleaning record' : 'Log a cleaning'}
     >
       <form onSubmit={submit} className="space-y-4" noValidate>
-        <Field label="Cleaned by" htmlFor="cleanedBy" error={errors.cleanedBy?.message}>
-          <input
-            {...register('cleanedBy')}
-            id="cleanedBy"
-            className={inputClass}
-            aria-invalid={Boolean(errors.cleanedBy)}
-            aria-describedby={errors.cleanedBy ? 'cleanedBy-error' : undefined}
+        <Field
+          label="Cleaned by"
+          htmlFor="cleanedById"
+          error={errors.cleanedById?.message ?? (users.isError ? 'Could not load users.' : undefined)}
+          hint="Type to search by name or email."
+        >
+          {/* Controller, not register: the combobox is not a native input, so
+              its value/onChange have to be wired explicitly. */}
+          <Controller
+            control={control}
+            name="cleanedById"
+            render={({ field }) => (
+              <Combobox
+                id="cleanedById"
+                options={userOptions}
+                value={field.value ?? null}
+                onChange={field.onChange}
+                isLoading={users.isPending}
+                disabled={users.isError}
+                placeholder="Search people…"
+                emptyMessage="No matching people"
+                aria-invalid={Boolean(errors.cleanedById)}
+                aria-describedby={errors.cleanedById ? 'cleanedById-error' : 'cleanedById-hint'}
+              />
+            )}
           />
         </Field>
 

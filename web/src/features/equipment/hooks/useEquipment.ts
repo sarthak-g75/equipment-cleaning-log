@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { apiClient } from '../../../services/apiClient';
 import type { Envelope, Equipment, EquipmentStatus } from '../../../types/api';
+import type { EquipmentFormValues } from '../validators/equipmentSchema';
 
 export const equipmentKeys = {
   all: ['equipment'] as const,
@@ -39,10 +40,41 @@ export function useEquipmentDetail(id: string) {
 export function useCreateEquipment() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { name: string; code: string }) => {
+    mutationFn: async (input: EquipmentFormValues) => {
       const response = await apiClient.post<Envelope<Equipment>>('/equipment', input);
       return response.data.data;
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: equipmentKeys.all }),
+  });
+}
+
+export function useUpdateEquipment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, values }: { id: string; values: EquipmentFormValues }) => {
+      const response = await apiClient.patch<Envelope<Equipment>>(`/equipment/${id}`, values);
+      return response.data.data;
+    },
+    onSuccess: (updated) => {
+      void queryClient.invalidateQueries({ queryKey: equipmentKeys.all });
+      queryClient.setQueryData(equipmentKeys.detail(updated.id), updated);
+    },
+  });
+}
+
+export function useDeleteEquipment() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    // The API refuses (409 EQUIPMENT_IN_USE) when the equipment has cleaning
+    // records, because deleting it would orphan an audit trail. The caller
+    // surfaces that message rather than treating it as an unexpected failure.
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/equipment/${id}`);
+      return id;
+    },
+    onSuccess: (id) => {
+      void queryClient.invalidateQueries({ queryKey: equipmentKeys.all });
+      queryClient.removeQueries({ queryKey: equipmentKeys.detail(id) });
+    },
   });
 }

@@ -19,10 +19,20 @@ export interface Equipment {
   updatedAt: string;
 }
 
+/** The subset of a user the API embeds on related records. */
+export interface UserSummary {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+}
+
 export interface CleaningRecord {
   id: string;
   equipmentId: string;
-  cleanedBy: string;
+  cleanedById: string;
+  /** Embedded by the API, so rendering a name needs no second request. */
+  cleanedBy: UserSummary;
   cleanedAt: string;
   method: string;
   notes: string | null;
@@ -35,6 +45,12 @@ export interface FieldChange {
   field: string;
   oldValue: string | null;
   newValue: string | null;
+  /**
+   * Present only for fields holding a reference to another row. The API stores
+   * the raw id and resolves these for display.
+   */
+  oldLabel?: string | null;
+  newLabel?: string | null;
 }
 
 export interface AuditChangeSet {

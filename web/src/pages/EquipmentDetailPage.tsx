@@ -170,7 +170,7 @@ export function EquipmentDetailPage() {
         isOpen={isFormOpen}
         onClose={() => setIsFormOpen(false)}
         record={editing ?? undefined}
-        defaultCleanedBy={user?.name ?? ''}
+        defaultCleanedById={user?.id ?? ''}
         onSubmit={(values) =>
           editing
             ? updateRecord.mutateAsync({ id: editing.id, values })

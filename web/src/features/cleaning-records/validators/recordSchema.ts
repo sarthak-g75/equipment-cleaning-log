@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const recordSchema = z.object({
-  cleanedBy: z.string().trim().min(1, 'Who performed the cleaning?').max(120),
+  cleanedById: z.uuid('Select who performed the cleaning'),
   cleanedAt: z
     .string()
     .min(1, 'When was it cleaned?')

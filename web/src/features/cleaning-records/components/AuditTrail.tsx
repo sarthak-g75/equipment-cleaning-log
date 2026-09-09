@@ -41,14 +41,14 @@ export function AuditTrail({ changeSets, isLoading, error, onRetry }: AuditTrail
                   {/* An explicit em-dash for null, so "cleared the notes" is
                       visually distinct from "did not touch the notes". */}
                   <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-800 line-through decoration-red-300">
-                    {displayAuditValue(change.oldValue, change.field)}
+                    {displayAuditValue(change.oldValue, change.field, change.oldLabel)}
                   </span>
                   <span aria-hidden="true" className="text-slate-400">
                     &rarr;
                   </span>
                   <span className="sr-only">changed to</span>
                   <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-emerald-900">
-                    {displayAuditValue(change.newValue, change.field)}
+                    {displayAuditValue(change.newValue, change.field, change.newLabel)}
                   </span>
                 </dd>
               </div>

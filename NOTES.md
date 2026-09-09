@@ -36,6 +36,18 @@ denormalisation is idiomatic for an append-only audit table anyway.
 later renamed, history must still show the name as it stood at the time of the change. An
 audit trail that rewrites itself when a lookup table changes isn't an audit trail.
 
+### Reference fields store the id and resolve a label for display
+
+`cleanedById` and `equipmentId` hold UUIDs. The audit trail stores the raw id, because that
+is what actually changed and it is the value that stays correct forever. But
+`cleanedById: 3f1a… → 8c2b…` tells a human nothing, so the audit endpoint resolves those
+ids to display labels (`oldLabel`/`newLabel`) alongside the raw values.
+
+Resolution is batched — one query per referenced table for the whole response — rather than
+a lookup per change row, which is the N+1 this endpoint would otherwise have. An id that no
+longer resolves falls back to the raw value rather than rendering blank, so a deleted
+reference degrades to something truthful instead of an empty cell.
+
 ### Values are stored as text, compared after serialization
 
 `serializeAuditValue` renders every auditable value to a canonical string, and the diff
@@ -160,11 +172,25 @@ interesting pagination is on cleaning records, and paginating both would have be
 
 These are assumptions I made where the brief left room. Each was a judgement call.
 
-**`cleanedBy` and the audit actor are different people.** The operator who physically
-cleaned the vessel often has no login; the person recording or verifying it does. So
-`cleanedBy` is a plain string (name/badge) and the audit actor is always the authenticated
-user from the JWT. Conflating them would be wrong in a regulated context. The form defaults
-`cleanedBy` to the signed-in user's name, so the common case is still one less field to type.
+**`cleanedBy` is a relation to `User`, and is still distinct from the audit actor.**
+These are two different people and the model keeps them apart: `cleanedById` is who
+physically performed the cleaning, while the audit actor is whoever was authenticated when
+the record was written or changed. An operator can log a cleaning that a colleague carried
+out, and the trail records both facts truthfully.
+
+I first modelled `cleanedBy` as free text, reasoning that a shop-floor operator may not
+have a login. That was the wrong call: a name string can't answer "show me everything this
+person cleaned" without a fragile match, and it silently goes stale when someone is
+renamed. A foreign key fixes both. If unlicensed operators genuinely need recording, the
+right answer is a `User` row that cannot log in, not a free-text column.
+
+Because the table already held rows, the change ships as the standard three-step migration
+— add nullable, backfill, enforce `NOT NULL`. The backfill matches the legacy abbreviated
+names ("B. Novak") against `User.name` on surname plus first initial, and falls back to the
+earliest user for anything unmatched. It also handles the degenerate case of rows to
+attribute but no users to attribute them to, by creating a clearly-labelled placeholder
+with an unusable password hash — deleting unattributable cleaning records would destroy
+audit history, which is the one thing this system must not do.
 
 **`status` is not patchable.** Verification is a separate, role-gated transition:
 `POST /cleaning-records/:id/verify`, restricted to `qa`. If `status` were in the PATCH body,
@@ -214,11 +240,23 @@ absence; it isn't an oversight.
 **Tailwind 4** is a Vite plugin, not a PostCSS pipeline — hence no `tailwind.config.js` and
 no `postcss.config.js`.
 
-**No component library.** The dialog is hand-written: focus moves in on open, Tab is
-trapped, Escape closes, focus returns to the trigger. A production app should use a
-well-tested primitive (Radix, React Aria) because there are more edge cases here than are
-worth re-implementing — but a generated component library would have meant a lot of code in
-the diff I didn't write, and the brief asks that I be able to explain every line.
+**No component library.** The dialog and the searchable people picker are both hand-written.
+The dialog moves focus in on open, traps Tab, closes on Escape and restores focus to its
+trigger. The picker follows the ARIA combobox pattern: `aria-activedescendant` tracks the
+highlighted option so DOM focus stays on the input and typing keeps working, arrows wrap at
+both ends, Enter commits, Escape closes without committing, and blurring reverts the typed
+query so the visible text can never disagree with the value actually held. Its Escape
+handler stops propagation, so closing the dropdown does not also close the surrounding
+dialog.
+
+A production app should use a well-tested primitive (Radix, React Aria) because there are
+more edge cases here than are worth re-implementing — but a generated component library
+would have meant a lot of code in the diff I didn't write, and the brief asks that I be
+able to explain every line.
+
+The picker filters client-side over an already-fetched list, and `GET /users` caps at 50.
+For a directory larger than that, the filter should move to a debounced server-side query —
+the endpoint already accepts `?q=`, so it is a hook change rather than a redesign.
 
 **No global store.** Server state is TanStack Query; the status filter is URL state so a
 filtered view is shareable and survives a refresh; everything else is local. Reaching for
@@ -266,9 +304,10 @@ Roughly in the order I'd add them next.
   audit table, but it does mean referential integrity there is enforced by the application
   rather than the database. A per-entity audit table would fix it at the cost of
   duplicating the whole mechanism per entity.
-- **Equipment create/update has no UI** — the API supports full CRUD and it's covered by
-  tests, but the front-end only browses equipment and manages cleaning records against it.
-  I spent the front-end budget on the parts the brief actually scores (paginated records,
-  the form, the audit trail) rather than spreading it thin.
 - **The seed is idempotent by truncation**, which is right for a demo and wrong for
   anything else.
+- **Equipment has no server-side pagination or search.** It's a bounded reference list
+  today, and the UI filters by status only. Once it outgrows one screen it should use the
+  same cursor helper the cleaning records use.
+- **There is no UI for managing users**, so the "cleaned by" picker is limited to seeded
+  accounts. Adding one is ordinary CRUD over an endpoint that already exists.

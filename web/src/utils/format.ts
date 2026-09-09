@@ -21,6 +21,7 @@ export const toDateTimeLocal = (iso: string): string => {
 
 const FIELD_LABELS: Record<string, string> = {
   equipmentId: 'Equipment',
+  cleanedById: 'Cleaned by',
   cleanedBy: 'Cleaned by',
   cleanedAt: 'Cleaned at',
   method: 'Method',
@@ -32,9 +33,18 @@ const FIELD_LABELS: Record<string, string> = {
 
 export const fieldLabel = (field: string): string => FIELD_LABELS[field] ?? field;
 
-/** Renders an audit value, keeping "no value" visually distinct from a blank cell. */
-export const displayAuditValue = (value: string | null, field: string): string => {
+/**
+ * Renders an audit value, keeping "no value" visually distinct from a blank cell.
+ * `label` is the server-resolved display form for reference fields — preferred
+ * when present so the trail shows a name rather than a UUID.
+ */
+export const displayAuditValue = (
+  value: string | null,
+  field: string,
+  label?: string | null,
+): string => {
   if (value === null) return '—';
+  if (label) return label;
   if (field === 'cleanedAt') return formatTimestamp(value);
   return value;
 };

@@ -84,8 +84,8 @@ npm run dev                      # http://localhost:5173
 ## Tests
 
 ```bash
-cd api && npm test               # 53 tests: unit + integration + e2e
-cd web && npm test               # 12 tests: components with a mocked network
+cd api && npm test               # 63 tests: unit + integration + e2e
+cd web && npm test               # 31 tests: components with a mocked network
 ```
 
 The API's unit tests (the audit diff and the cursor codec) need no database. The
@@ -103,6 +103,8 @@ What the tests are actually for:
 | `api/tests/integration/audit.test.ts` | Audit writes are correct, and a failed audit write rolls the record update back |
 | `api/tests/e2e/api.test.ts` | Auth, authorisation, the full record lifecycle over HTTP, error envelopes |
 | `web/src/features/cleaning-records/**` | Audit drawer renders old → new and fetches lazily; the form maps server errors onto fields |
+| `web/src/components/Combobox.test.tsx` | The people picker filters, wraps, commits on Enter, and reverts on Escape — keyboard only |
+| `web/src/pages/EquipmentListPage.test.tsx` | Equipment create/edit/delete, duplicate-code and in-use conflicts surfaced in place |
 
 Other checks:
 
@@ -127,6 +129,7 @@ string clients can branch on.
 | `GET` | `/health` | No auth. Used by the compose healthcheck. |
 | `POST` | `/auth/login` | `{ email, password }` → `{ token, user }` |
 | `GET` | `/auth/me` | The current user, from the token |
+| `GET` | `/users` | `?role=&q=` — backs the "cleaned by" picker. Search over name and email, capped at 50 |
 | `GET` | `/equipment` | `?status=active\|retired` |
 | `POST` | `/equipment` | `201` + `Location` |
 | `GET` | `/equipment/:id` | |
@@ -136,7 +139,7 @@ string clients can branch on.
 | `GET` | `/equipment/:equipmentId/cleaning-records` | `?limit=&cursor=&status=` — keyset paginated |
 | `POST` | `/equipment/:equipmentId/cleaning-records` | Writes the record and its `CREATE` audit in one transaction |
 | `GET` | `/cleaning-records/:id` | |
-| `PATCH` | `/cleaning-records/:id` | `cleanedBy`, `cleanedAt`, `method`, `notes` — **not** `status` |
+| `PATCH` | `/cleaning-records/:id` | `cleanedById`, `cleanedAt`, `method`, `notes` — **not** `status` |
 | `POST` | `/cleaning-records/:id/verify` | Role `qa` only. `pending → verified` |
 | `GET` | `/cleaning-records/:id/audit` | Change sets, newest first |
 
@@ -188,9 +191,9 @@ api/
 
 web/src/
   app/               App, router, providers, error boundary
-  pages/             login · equipment list · equipment detail
-  features/          auth · equipment · cleaning-records (components/hooks/validators)
-  components/        Button, Badge, Dialog, Field, loading/error/empty states
+  pages/             login · equipment list (CRUD) · equipment detail
+  features/          auth · users · equipment · cleaning-records (components/hooks/validators)
+  components/        Button, Badge, Dialog, ConfirmDialog, Combobox, Field, loading/error/empty states
   services/          the Axios instance, interceptors, ApiError
   tests/             setup, MSW handlers, renderWithProviders
 ```

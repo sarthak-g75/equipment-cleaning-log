@@ -3,7 +3,7 @@ import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderWithProviders } from '../../../tests/renderWithProviders';
 import { ApiError } from '../../../services/apiClient';
-import { makeRecord } from '../../../tests/handlers';
+import { BOB, makeRecord } from '../../../tests/handlers';
 import { RecordFormDialog } from './RecordFormDialog';
 
 const open = (props: Partial<Parameters<typeof RecordFormDialog>[0]> = {}) => {
@@ -15,7 +15,7 @@ const open = (props: Partial<Parameters<typeof RecordFormDialog>[0]> = {}) => {
       isOpen
       onClose={onClose}
       onSubmit={onSubmit}
-      defaultCleanedBy="Bob Novak"
+      defaultCleanedById={BOB.id}
       {...props}
     />,
   );
@@ -24,13 +24,13 @@ const open = (props: Partial<Parameters<typeof RecordFormDialog>[0]> = {}) => {
 };
 
 describe('RecordFormDialog', () => {
-  it('labels every field and marks itself as a modal dialog', () => {
+  it('labels every field and marks itself as a modal dialog', async () => {
     open();
 
     expect(screen.getByRole('dialog')).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByRole('dialog', { name: 'Log a cleaning' })).toBeInTheDocument();
     // Queried by label, which is also the check that a screen reader can find them.
-    expect(screen.getByLabelText('Cleaned by')).toHaveValue('Bob Novak');
+    expect(await screen.findByDisplayValue('Bob Novak')).toBeInTheDocument();
     expect(screen.getByLabelText('Method')).toBeInTheDocument();
     expect(screen.getByLabelText('Notes')).toBeInTheDocument();
   });
@@ -43,15 +43,15 @@ describe('RecordFormDialog', () => {
     expect(screen.getByLabelText('Notes')).toHaveValue('Swab passed');
   });
 
-  it('blocks submission and reports the field when a value is missing', async () => {
+  it('blocks submission and reports the field when a required value is missing', async () => {
     const user = userEvent.setup();
     const { onSubmit } = open();
 
-    await user.clear(screen.getByLabelText('Cleaned by'));
+    await user.clear(screen.getByLabelText('Method'));
     await user.click(screen.getByRole('button', { name: 'Log cleaning' }));
 
-    expect(await screen.findByText('Who performed the cleaning?')).toBeInTheDocument();
-    expect(screen.getByLabelText('Cleaned by')).toHaveAttribute('aria-invalid', 'true');
+    expect(await screen.findByText('Which method was used?')).toBeInTheDocument();
+    expect(screen.getByLabelText('Method')).toHaveAttribute('aria-invalid', 'true');
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
